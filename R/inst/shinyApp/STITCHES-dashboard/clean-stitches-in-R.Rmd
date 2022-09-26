@@ -1,0 +1,524 @@
+---
+title: "stitches in R"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# IMPORTANT NOTES
+
+- Necessary to avoid R variable names like `variable.name` since `.` in python is somewhat analogous to `$` in R. 
+- Follow the instructions in the `stitches-in-R-setup` R markdown so that this notebook will work. If you've followed that markdown, `stitches` should be installed in the `r-reticulate` virtual environment for this notebook and should be callable. 
+
+# Setup
+
+## R
+```{r}
+#### R  BLOCK ####
+library(reticulate)
+# # indicate that we want to use a specific virtualenv
+use_virtualenv("r-reticulate", required =TRUE)
+
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# time slice for the map plotting:
+map_time <- '2100-12-31'
+```
+
+## python
+```{python}
+#### Python Block ####
+import stitches 
+import pandas as pd
+import pkg_resources
+import xarray as xr
+import numpy as np
+pd.set_option('display.max_columns', None)
+
+
+# The CMIP6 ESM we want to emulate and the variables we want to
+# emulate
+esm = ['CanESM5']
+vars1 = ['tas', 'pr', 'hurs', 'psl']
+```
+
+# Load Hector data
+pulled a quick rcp4.5 from HectorUI
+```{r}
+#### R  BLOCK ####
+hector_tgav <- read.csv('data/Hector-data-2022-09-22.csv', skip=3, stringsAsFactors = FALSE)
+hector_exp <- unique(hector_tgav$scenario)
+head(hector_tgav)
+```
+
+
+# Reshape the Hector data to be stitches target
+
+First we reshape the Hector time series to match the CMIP6 ESM GSAT smooth anomaly time series that STITCHES operates on:
+NOTE we should probably add this as a function to stitches 
+NOTE Hector time series start in 1800 - there's no science reason we couldn't do matching over that window and have a gridded netcdf of an extra 50 years of history. 
+```{r}
+#### R  BLOCK ####
+hector_tgav %>%
+    mutate(variable = 'tas',
+           ensemble = 'hectorUI1',# doesn't affect the matching or stitching
+           model = 'Hector') %>%
+    rename(experiment = scenario) %>% 
+    filter(year >= 1850) %>%
+    select(variable, experiment, ensemble, model, year, value,  -units) ->
+    target_tgav
+
+print(head(target_tgav))
+```
+
+# Convert Hector Tgav to stitches windows
+
+Now that we have shaped it as stitches is expecting, we can use stitches functions to calculate the matching windows for this target data
+
+```{python}
+#### Python Block ####
+target_data = stitches.fx_processing.get_chunk_info(
+    stitches.fx_processing.chunk_ts(df = r.target_tgav, n=9))
+
+print(target_data.head())
+```
+
+# Load the stitches archive data for matching
+
+```{python, echo=FALSE}
+exps = ['ssp126', 'ssp245', 'ssp370', 'ssp460', 'ssp585']
+# pangeo table of ESMs for reference
+pangeo_path = pkg_resources.resource_filename('stitches', 'data/pangeo_table.csv')
+pangeo_data = pd.read_csv(pangeo_path)
+# print(np.sort(pangeo_data.variable.unique()))
+pangeo_data = pangeo_data[((
+                               (pangeo_data['variable'].isin(vars1)) )  )
+                          & ((pangeo_data['domain'].str.contains('mon')) ) &
+                           ((pangeo_data['experiment'].isin(exps))) &
+                           (pangeo_data['model'].isin(esm))].copy()
+
+
+
+pangeo_good_ensembles =[]
+for name, group in pangeo_data.groupby(['model', 'experiment', 'ensemble']):
+    df = group.drop_duplicates().copy()
+    if len(df) >= len(vars1):
+        pangeo_good_ensembles.append(df)
+    del(df)
+pangeo_good_ensembles1 = pd.concat(pangeo_good_ensembles)
+pangeo_good_ensembles2  = pangeo_good_ensembles1[['model', 'experiment', 'ensemble']].drop_duplicates().copy()
+pangeo_good_ensembles = pangeo_good_ensembles2.reset_index(drop=True).copy()
+del(pangeo_good_ensembles1)
+del(pangeo_good_ensembles2)
+
+# load the full archive data and subset to above
+path = pkg_resources.resource_filename('stitches', 'data/matching_archive.csv')
+archive_data = pd.read_csv(path)
+
+
+# Keep only the entries that appeared in pangeo_good_ensembles:
+keys =['model', 'experiment', 'ensemble']
+i1 = archive_data.set_index(keys).index
+i2 = pangeo_good_ensembles.set_index(keys).index
+archive_data= archive_data[i1.isin(i2)].copy()
+del(i1)
+del(i2)
+
+# # Don't keep archive points with a base year of every year, just the defaults and
+# # the midpont
+# # do the subset to just core years + 1/2 window offset years.
+# years = np.concatenate((1854+9*np.array(list( range(0,28))), 1859+9*np.array(list( range(0,27)))))
+# archive_data = archive_data[archive_data['year'].isin(years)].reset_index(drop=True).copy()
+
+print(archive_data.head())
+
+```
+
+# Match
+```{python}
+#### python block ####
+my_recipes = stitches.make_recipe(target_data, archive_data,
+                                  non_tas_variables=['pr', 'psl', 'hurs'],
+                                  tol = 0.13, N_matches = 10000, reproducible = True)
+
+print(my_recipes.head())
+```
+
+Unless otherwise specified by the argument `reproducible = True`, the draws stitches takes from the pool of matches is stochastic. 
+
+```{python, echo = FALSE}
+#### python block ####
+my_recipes2 = stitches.make_recipe(target_data, archive_data,
+                                  non_tas_variables=['pr', 'psl', 'hurs'],
+                                  tol = 0.13, N_matches = 10000)
+
+```
+Within each of these ensembles, there's no envelope collapse. If we were to concatenate them together into
+a super-ensemble, there would be. So it's not as powerful as a very large ensemble of collapse free realizations but it's still a distinct ensemble to consider.
+
+
+
+# stitch Tgav
+
+```{python}
+#### python block ####
+stitched_global_temp = stitches.gmat_stitching(my_recipes)
+print(stitched_global_temp.head())
+```
+
+
+```{python, echo =FALSE}
+#### python block ####
+stitched_global_temp2 = stitches.gmat_stitching(my_recipes2)
+```
+
+# plot Tgav
+```{r, echo = FALSE}
+#### R block ####
+stitched_tgav <- py$stitched_global_temp
+
+# some reshaping to make plotting easier
+stitched_tgav %>%
+    mutate(tmp = stitching_id) %>%
+    separate(tmp, into = c('scenario', 't1', 't2'), sep = '~') %>%
+    select(-t1, -t2) ->
+    stitched_tgav
+
+ggplot(data = stitched_tgav, aes(x= year, y = value, color = stitching_id)) +
+    geom_line(size=0.2) +
+  geom_line(data = hector_tgav, aes(x = year, y=value), color='black') + 
+  ylab('degC') +
+  ggtitle('global average temperature anomaly - Ensemble 1')+ 
+  theme(legend.position="bottom") +
+  theme(legend.title = element_text( size=4), legend.text=element_text(size=4))
+
+
+
+
+stitched_tgav2 <- py$stitched_global_temp2
+
+# some reshaping to make plotting easier
+stitched_tgav2 %>%
+    mutate(tmp = stitching_id) %>%
+    separate(tmp, into = c('scenario', 't1', 't2'), sep = '~') %>%
+    select(-t1, -t2) ->
+    stitched_tgav2
+
+ggplot(data = stitched_tgav2, aes(x= year, y = value, color = stitching_id)) +
+    geom_line(size=0.2) +
+  geom_line(data = hector_tgav, aes(x = year, y=value), color='black') + 
+  ylab('degC') +
+  ggtitle('global average temperature anomaly - Ensemble 2')+ 
+  theme(legend.position="bottom") +
+  theme(legend.title = element_text( size=4), legend.text=element_text(size=4))
+
+```
+
+if you're really pressed for computing time, you can pair this with pattern scaling and get the mean spatial field. But we can do internal variability at the gridded multivariate scale, so we do.
+
+# stitch gridded
+Using the above recipes, stitches can produce new gridded netcdf files for each recipe, for multiple variables. 
+Creating multiple netcdfs of monthly data is slower than focusing on GSAT. Still much faster than an ESM, and once the recipes are set, very parallelizable. But for tractability, we are just going to stitch the gridded netcdfs for one ensemble member.
+
+```{python}
+#### python block ####
+# Just do one realization
+recipe = my_recipes[my_recipes['stitching_id'] == 'RCP  Standard-RCP-4.5~hectorUI1~1'].reset_index(drop=True).copy()
+
+```
+
+
+We must specify a directory for the netcdfs to be saved to. We will use simply do it directly here.
+On my computer, constructing these 4 netcdfs took ~2-3 minutes.
+
+```{python}
+#### python block ####
+stitches.gridded_stitching(out_dir='data', rp =recipe)
+```
+
+
+# plot gridded
+
+- we will do maps of all 4 variables at a specified month and year
+- we will do a time series of each variable in a specific grid cell
+
+```{r, echo=FALSE}
+#### R block ####
+# pull all netcdfs:
+files <- list.files('data', pattern  = '.nc', full.names = TRUE)
+
+#subset to just the ESM of interest:
+files <- files[grepl(py$esm, files)]
+
+# subset to just the Hector scenario read in above:
+files <- files[grepl(hector_exp, files)]
+
+print(files)
+```
+
+
+
+# python maps and time series
+
+It's a lot easier to use python to load in the netcdfs and select a grid cell or a time slice, save those off as simpler data frames than a full netcdf, and plot in R. The reshaping set of code that we often do in R to work with netcdf data is just so much faster if we've pre-sliced the data to a single grid cell or single time step in python.
+
+
+
+## tas 
+TODO just make it a function
+```{python}
+#### python block ####
+py_files = pd.DataFrame(r.files, columns = ['file_name'])
+
+# load the netcdf:
+f = py_files.loc[py_files['file_name'].str.contains('tas')].values[0]
+tas_nc = xr.open_dataset(f[0])
+
+# time slice map:
+tas_time_slice = tas_nc.sel(time = r.map_time).copy()
+
+
+# time series for single grid cell:
+# lon and lat values for a grid cell near College Park, MD, home of JGCRI:
+cp_lat = 38.9897
+cp_lon = 180 + 76.9378 # this is probably not actually right 
+
+# lat and lon coordinates closest
+abslat = np.abs(tas_nc.lat - cp_lat)
+abslon = np.abs(tas_nc.lon-cp_lon)
+c = np.maximum(abslon, abslat)
+([lon_loc], [lat_loc]) = np.where(c == np.min(c))
+lon_grid = tas_nc.lon[lon_loc]
+lat_grid = tas_nc.lat[lat_loc]
+
+tas_grid_slice = tas_nc.sel(lon = lon_grid, lat=lat_grid,
+                         time = slice('1850-01-01', '2099-12-31')).copy()
+del(tas_nc)
+```
+
+Take a look at this data in R:
+```{r}
+#### R block ####
+# map data:
+print(py$tas_time_slice$tas)
+tas_val <- py$tas_time_slice$tas$values
+tas_lon <- py$tas_time_slice$lon$values
+tas_lat <- py$tas_time_slice$lat$values
+grid <- expand.grid(list(lon=tas_lon,lat=tas_lat))
+tas <- cbind(grid, 
+             value=t(matrix(aperm(tas_val,c(2,1)), 1,length(tas_lat)*length(tas_lon))))
+
+as.character(py$tas_time_slice$time) %>%
+  substr(.,  37, 43) ->
+  tas_time
+  
+ggplot(tas, aes(x = lon, y = lat, color=value, fill = value)) + geom_tile() +
+  ggtitle(paste(tas_time, 'tas (K)'))
+
+
+# grid time series data:
+print(py$tas_grid_slice$tas)
+cp_tas <- data.frame(value = py$tas_grid_slice$tas$values)
+
+data.frame(time = as.character(py$tas_grid_slice$time$values)) %>%
+  separate(time, into = c('year', 'month', 'day'), sep = '-') %>%
+  select(-day) %>%
+  mutate(year = as.integer(year),
+         month = as.integer(month),
+         time_index = as.integer(row.names(.))) ->
+  cp_time
+
+ggplot(cbind(cp_time, cp_tas), aes(x = time_index, y = value)) + geom_line() +
+  ggtitle('College Park monthly tas, 1850-2100 (K)') 
+
+ggplot(cbind(cp_time, cp_tas) %>% filter(year >= 2021), aes(x = time_index, y = value)) + geom_line() +
+  ggtitle('College Park monthly tas, 2021-2100 (K)') 
+
+```
+
+
+
+
+
+## pr
+```{python}
+py_files = pd.DataFrame(r.files, columns = ['file_name'])
+
+# load the netcdf:
+f = py_files.loc[py_files['file_name'].str.contains('pr')].values[0]
+pr_nc = xr.open_dataset(f[0])
+
+# time slice map:
+pr_time_slice = pr_nc.sel(time = r.map_time).copy()
+
+
+# time series for single grid cell:
+# lon and lat values for a grid cell near College Park, MD, home of JGCRI:
+cp_lat = 38.9897
+cp_lon = 180 + 76.9378 # this is probably not actually right 
+
+# lat and lon coordinates closest
+abslat = np.abs(pr_nc.lat - cp_lat)
+abslon = np.abs(pr_nc.lon-cp_lon)
+c = np.maximum(abslon, abslat)
+([lon_loc], [lat_loc]) = np.where(c == np.min(c))
+lon_grid = pr_nc.lon[lon_loc]
+lat_grid = pr_nc.lat[lat_loc]
+
+pr_grid_slice = pr_nc.sel(lon = lon_grid, lat=lat_grid,
+                         time = slice('1850-01-01', '2099-12-31')).copy()
+del(pr_nc)
+```
+
+Take a look at this data in R:
+```{r}
+# map data:
+print(py$pr_time_slice$pr)
+pr_val <- py$pr_time_slice$pr$values
+pr_lon <- py$pr_time_slice$lon$values
+pr_lat <- py$pr_time_slice$lat$values
+grid <- expand.grid(list(lon=pr_lon,lat=pr_lat))
+pr <- cbind(grid, 
+             value=t(matrix(aperm(pr_val,c(2,1)), 1,length(pr_lat)*length(pr_lon))))
+
+as.character(py$pr_time_slice$time) %>%
+  substr(.,  37, 43) ->
+  pr_time
+  
+ggplot(pr, aes(x = lon, y = lat, color=value, fill = value)) + geom_tile() +
+  ggtitle(paste(pr_time, 'pr (kg m-2 s-1)'))
+
+
+# grid time series data:
+print(py$pr_grid_slice$pr)
+cp_pr <- data.frame(value = py$pr_grid_slice$pr$values)
+
+data.frame(time = as.character(py$pr_grid_slice$time$values)) %>%
+  separate(time, into = c('year', 'month', 'day'), sep = '-') %>%
+  select(-day) %>%
+  mutate(year = as.integer(year),
+         month = as.integer(month),
+         time_index = as.integer(row.names(.))) ->
+  cp_time
+
+ggplot(cbind(cp_time, cp_pr), aes(x = time_index, y = value)) + geom_line() +
+  ggtitle('College Park monthly pr (kg m-2 s-1), 1850-2100') 
+
+ggplot(cbind(cp_time, cp_pr) %>% filter(year >= 2021), aes(x = time_index, y = value)) + geom_line() +
+  ggtitle('College Park monthly pr (kg m-2 s-1), 2021-2100') 
+
+```
+
+## hurs
+```{python}
+py_files = pd.DataFrame(r.files, columns = ['file_name'])
+
+# load the netcdf:
+f = py_files.loc[py_files['file_name'].str.contains('hurs')].values[0]
+hurs_nc = xr.open_dataset(f[0])
+
+# time slice map:
+hurs_time_slice = hurs_nc.sel(time = r.map_time).copy()
+
+
+# time series for single grid cell:
+# lon and lat values for a grid cell near College Park, MD, home of JGCRI:
+cp_lat = 38.9897
+cp_lon = 180 + 76.9378 # this is probably not actually right 
+
+# lat and lon coordinates closest
+abslat = np.abs(hurs_nc.lat - cp_lat)
+abslon = np.abs(hurs_nc.lon-cp_lon)
+c = np.maximum(abslon, abslat)
+([lon_loc], [lat_loc]) = np.where(c == np.min(c))
+lon_grid = hurs_nc.lon[lon_loc]
+lat_grid = hurs_nc.lat[lat_loc]
+
+hurs_grid_slice = hurs_nc.sel(lon = lon_grid, lat=lat_grid,
+                         time = slice('1850-01-01', '2099-12-31')).copy()
+del(hurs_nc)
+```
+
+Take a look at this data in R:
+```{r}
+# map data:
+print(py$hurs_time_slice$hurs)
+hurs_val <- py$hurs_time_slice$hurs$values
+hurs_lon <- py$hurs_time_slice$lon$values
+hurs_lat <- py$hurs_time_slice$lat$values
+grid <- expand.grid(list(lon=pr_lon,lat=pr_lat))
+hurs <- cbind(grid, 
+             value=t(matrix(aperm(hurs_val,c(2,1)), 1,length(hurs_lat)*length(hurs_lon))))
+
+as.character(py$hurs_time_slice$time) %>%
+  substr(.,  37, 43) ->
+  hurs_time
+  
+ggplot(hurs, aes(x = lon, y = lat, color=value, fill = value)) + geom_tile() +
+  ggtitle(paste(hurs_time, 'hurs (%)'))
+
+
+# grid time series data:
+print(py$hurs_grid_slice$hurs)
+cp_hurs <- data.frame(value = py$hurs_grid_slice$hurs$values)
+
+data.frame(time = as.character(py$hurs_grid_slice$time$values)) %>%
+  separate(time, into = c('year', 'month', 'day'), sep = '-') %>%
+  select(-day) %>%
+  mutate(year = as.integer(year),
+         month = as.integer(month),
+         time_index = as.integer(row.names(.))) ->
+  cp_time
+
+ggplot(cbind(cp_time, cp_hurs), aes(x = time_index, y = value)) + geom_line() +
+  ggtitle('College Park monthly hurs (%), 1850-2100') 
+
+ggplot(cbind(cp_time, cp_hurs) %>% filter(year >= 2021), aes(x = time_index, y = value)) + geom_line() +
+  ggtitle('College Park monthly hurs (%), 2021-2100') 
+
+```
+
+## psl
+
+sea level pressure can't have a CP time series
+```{python}
+py_files = pd.DataFrame(r.files, columns = ['file_name'])
+
+# load the netcdf:
+f = py_files.loc[py_files['file_name'].str.contains('psl')].values[0]
+psl_nc = xr.open_dataset(f[0])
+
+# time slice map:
+psl_time_slice = psl_nc.sel(time = r.map_time).copy()
+del(psl_nc)
+
+```
+
+Take a look at this data in R:
+```{r}
+# map data:
+print(py$psl_time_slice$psl)
+psl_val <- py$psl_time_slice$psl$values
+psl_lon <- py$psl_time_slice$lon$values
+psl_lat <- py$psl_time_slice$lat$values
+grid <- expand.grid(list(lon=psl_lon,lat=psl_lat))
+psl <- cbind(grid, 
+             value=t(matrix(aperm(psl_val,c(2,1)), 1,length(psl_lat)*length(psl_lon))))
+
+as.character(py$psl_time_slice$time) %>%
+  substr(.,  37, 43) ->
+  pr_time
+  
+ggplot(psl, aes(x = lon, y = lat, color=value, fill = value)) + geom_tile() +
+  ggtitle(paste(pr_time, 'psl (Pa)'))
+
+```
