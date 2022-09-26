@@ -88,7 +88,7 @@ Now that we have shaped it as stitches is expecting, we can use stitches functio
 #### Python Block ####
 # smooth out Hector's historic volcano stuff and
 # save off the smoothed Hector time series we actually use for matching so can plot later:      
-target_hector = stitches.fx_processing.calculate_rolling_mean(r.target_tgav, size =19)
+target_hector = stitches.fx_processing.calculate_rolling_mean(r.target_tgav, size =31)
 
 target_data = stitches.fx_processing.get_chunk_info(
     stitches.fx_processing.chunk_ts(df = target_hector,  n=9))
@@ -147,7 +147,8 @@ print(archive_data.head())
 #### python block ####
 my_recipes = stitches.make_recipe(target_data, archive_data,
                                   non_tas_variables=['pr', 'psl', 'hurs'],
-                                  tol = 0.15, N_matches = 10000)
+                                  tol = 0.15, N_matches = 10000,
+                                  reproducible = True)
 print(my_recipes.head())
 ```
 
