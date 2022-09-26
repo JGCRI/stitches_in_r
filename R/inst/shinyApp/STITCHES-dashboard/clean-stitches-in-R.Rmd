@@ -86,9 +86,14 @@ Now that we have shaped it as stitches is expecting, we can use stitches functio
 
 ```{python}
 #### Python Block ####
-target_data = stitches.fx_processing.get_chunk_info(
-    stitches.fx_processing.chunk_ts(df = r.target_tgav, n=9))
+# smooth out Hector's historic volcano stuff and
+# save off the smoothed Hector time series we actually use for matching so can plot later:      
+target_hector = stitches.fx_processing.calculate_rolling_mean(r.target_tgav, size =19)
 
+target_data = stitches.fx_processing.get_chunk_info(
+    stitches.fx_processing.chunk_ts(df = target_hector,  n=9))
+      
+print(target_data.head())
 print(target_data.head())
 ```
 
@@ -107,13 +112,14 @@ pangeo_data = pangeo_data[((
                            (pangeo_data['model'].isin(esm))].copy()
 
 
-
 pangeo_good_ensembles =[]
+
 for name, group in pangeo_data.groupby(['model', 'experiment', 'ensemble']):
     df = group.drop_duplicates().copy()
     if len(df) >= len(vars1):
         pangeo_good_ensembles.append(df)
     del(df)
+    
 pangeo_good_ensembles1 = pd.concat(pangeo_good_ensembles)
 pangeo_good_ensembles2  = pangeo_good_ensembles1[['model', 'experiment', 'ensemble']].drop_duplicates().copy()
 pangeo_good_ensembles = pangeo_good_ensembles2.reset_index(drop=True).copy()
@@ -133,14 +139,7 @@ archive_data= archive_data[i1.isin(i2)].copy()
 del(i1)
 del(i2)
 
-# # Don't keep archive points with a base year of every year, just the defaults and
-# # the midpont
-# # do the subset to just core years + 1/2 window offset years.
-# years = np.concatenate((1854+9*np.array(list( range(0,28))), 1859+9*np.array(list( range(0,27)))))
-# archive_data = archive_data[archive_data['year'].isin(years)].reset_index(drop=True).copy()
-
 print(archive_data.head())
-
 ```
 
 # Match
@@ -148,20 +147,12 @@ print(archive_data.head())
 #### python block ####
 my_recipes = stitches.make_recipe(target_data, archive_data,
                                   non_tas_variables=['pr', 'psl', 'hurs'],
-                                  tol = 0.13, N_matches = 10000, reproducible = True)
-
+                                  tol = 0.15, N_matches = 10000)
 print(my_recipes.head())
 ```
 
 Unless otherwise specified by the argument `reproducible = True`, the draws stitches takes from the pool of matches is stochastic. 
 
-```{python, echo = FALSE}
-#### python block ####
-my_recipes2 = stitches.make_recipe(target_data, archive_data,
-                                  non_tas_variables=['pr', 'psl', 'hurs'],
-                                  tol = 0.13, N_matches = 10000)
-
-```
 Within each of these ensembles, there's no envelope collapse. If we were to concatenate them together into
 a super-ensemble, there would be. So it's not as powerful as a very large ensemble of collapse free realizations but it's still a distinct ensemble to consider.
 
@@ -175,11 +166,6 @@ stitched_global_temp = stitches.gmat_stitching(my_recipes)
 print(stitched_global_temp.head())
 ```
 
-
-```{python, echo =FALSE}
-#### python block ####
-stitched_global_temp2 = stitches.gmat_stitching(my_recipes2)
-```
 
 # plot Tgav
 ```{r, echo = FALSE}
@@ -195,39 +181,19 @@ stitched_tgav %>%
 
 ggplot(data = stitched_tgav, aes(x= year, y = value, color = stitching_id)) +
     geom_line(size=0.2) +
-  geom_line(data = hector_tgav, aes(x = year, y=value), color='black') + 
+  geom_line(data = hector_tgav, aes(x = year, y=value), color='black', size = 1.1) + 
+  geom_line(data = py$target_hector, aes(x = year, y=value), color='blue', size = 0.7) + 
   ylab('degC') +
   ggtitle('global average temperature anomaly - Ensemble 1')+ 
   theme(legend.position="bottom") +
   theme(legend.title = element_text( size=4), legend.text=element_text(size=4))
-
-
-
-
-stitched_tgav2 <- py$stitched_global_temp2
-
-# some reshaping to make plotting easier
-stitched_tgav2 %>%
-    mutate(tmp = stitching_id) %>%
-    separate(tmp, into = c('scenario', 't1', 't2'), sep = '~') %>%
-    select(-t1, -t2) ->
-    stitched_tgav2
-
-ggplot(data = stitched_tgav2, aes(x= year, y = value, color = stitching_id)) +
-    geom_line(size=0.2) +
-  geom_line(data = hector_tgav, aes(x = year, y=value), color='black') + 
-  ylab('degC') +
-  ggtitle('global average temperature anomaly - Ensemble 2')+ 
-  theme(legend.position="bottom") +
-  theme(legend.title = element_text( size=4), legend.text=element_text(size=4))
-
 ```
 
-if you're really pressed for computing time, you can pair this with pattern scaling and get the mean spatial field. But we can do internal variability at the gridded multivariate scale, so we do.
+
 
 # stitch gridded
 Using the above recipes, stitches can produce new gridded netcdf files for each recipe, for multiple variables. 
-Creating multiple netcdfs of monthly data is slower than focusing on GSAT. Still much faster than an ESM, and once the recipes are set, very parallelizable. But for tractability, we are just going to stitch the gridded netcdfs for one ensemble member.
+Creating multiple netcdfs of monthly data is slower than focusing on GSAT. Still much faster than an ESM, and once the recipes are set, very parallelizable. But for tractability, we are just going to stitch the gridded netcdfs for one generated ensemble member.
 
 ```{python}
 #### python block ####

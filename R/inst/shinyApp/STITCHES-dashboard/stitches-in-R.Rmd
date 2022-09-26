@@ -128,10 +128,15 @@ import xarray as xr
 import numpy as np
 pd.set_option('display.max_columns', None)
 
+# smooth out Hector's historic volcano stuff and
+# save off the smoothed Hector time series we actually use for matching so can plot later:      
+target_hector = stitches.fx_processing.calculate_rolling_mean(r.target_tgav, size =19)
 
 target_data = stitches.fx_processing.get_chunk_info(
-    stitches.fx_processing.chunk_ts(df = r.target_tgav, n=9))
-
+    stitches.fx_processing.chunk_ts(
+      df = target_hector,
+      n=9))
+      
 print(target_data.head())
 ```
 
@@ -204,7 +209,7 @@ print(archive_data.head())
 
 my_recipes = stitches.make_recipe(target_data, archive_data,
                                   non_tas_variables=['pr', 'psl', 'hurs'],
-                                  tol = 0.13, N_matches = 10000)
+                                  tol = 0.13, N_matches = 10000, reproducible = True)
 
 print(my_recipes.head())
 ```
@@ -247,7 +252,9 @@ stitched_tgav %>%
 
 ggplot(data = stitched_tgav, aes(x= year, y = value, color = stitching_id)) +
     geom_line(size=0.2) +
-  geom_line(data = hector_tgav, aes(x = year, y=value), color='black') + 
+  geom_line(data = hector_tgav, aes(x = year, y=value), color='black', size = 1.1) + 
+  geom_line(data = py$target_hector, aes(x = year, y=value), color='blue', size = 0.7) + 
+  ylab('degC') +
   ylab('degC') +
   ggtitle('global average temperature anomaly - Ensemble 1')+ 
   theme(legend.position="bottom") +
@@ -267,7 +274,8 @@ stitched_tgav2 %>%
 
 ggplot(data = stitched_tgav2, aes(x= year, y = value, color = stitching_id)) +
     geom_line(size=0.2) +
-  geom_line(data = hector_tgav, aes(x = year, y=value), color='black') + 
+  geom_line(data = hector_tgav, aes(x = year, y=value), color='black', size = 1.1) + 
+  geom_line(data = py$target_hector, aes(x = year, y=value), color='blue', size = 0.7) + 
   ylab('degC') +
   ggtitle('global average temperature anomaly - Ensemble 2')+ 
   theme(legend.position="bottom") +
