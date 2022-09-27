@@ -6,6 +6,7 @@
 2. Open the R project in Rstudio
 3. Follow the instructions in `stitches-in-R-setup.Rmd`.  Some of the setup steps must be executed manually, and then once they are, this markdown can be knit to finish the setup. You can read these steps easily either from the markdown or the compiled HTML file that comes with the cloning of the repo.
 
+This only worked for me if I was not on PNNL's VPN.
 
 The pre-knitting steps of this markdown are reproduced here as well: 
 
@@ -14,7 +15,7 @@ The pre-knitting steps of this markdown are reproduced here as well:
 
 - Necessary to avoid R variable names like `variable.name` since `.` in python is somewhat analogous to `$` in R. 
 
-- There are a bunch of steps you'll have to do before knitting this notebook.
+- There are a bunch of steps you'll have to do before knitting the `STITCHES-dashboard/stitches-in-R-setup.Rmd`.
 
 
 - only tested on mac
@@ -24,11 +25,11 @@ The pre-knitting steps of this markdown are reproduced here as well:
 - once those steps are followed and this notebook is ready to be knit to install `stitches` from github, do be aware that it has a lot of dependencies that come along for the ride so it takes like 5-10 minutes. In Rstudio, it just kind of looks like it is doing nothing.
 
 
-- I honestly I don't really understand virtual environments and especially `reticulate` seems sensitive, so if you want to add something to it later, honestly probably safer to delete the virtual environment and recreate from scratch here with the additions you want.
+- I honestly I don't really understand virtual environments and especially `reticulate` seems sensitive, so if you want to add something to it later,  probably safer to delete the virtual environment and recreate from scratch here with the additions you want.
 
 # BEFORE KNITTING
 
-With what I figured out by trial and error in `figure-out-reticulate-setup.Rmd`, these are the steps need to set things up so that this markdown's python chunks are executed with the right version of python in the right virtual environment. 
+With what I figured out by trial and error in `figure-out-reticulate-setup.Rmd`, these are the steps needed to set things up so that this markdown's python chunks are executed with the right version of python in the right virtual environment. 
 
 ## Step 1 - Python install
  This is outside of Rstudio
@@ -67,7 +68,10 @@ standard `install.packages("reticulate")`
 2. Because of the nesting of the `STITCHES-dashboard` directory in this R project, the markdown will look for any data directories in `STITCHES-dashboard`. The console will look for any data directories in the same level as the R project. I got around it by a copy of a `data` directory in each place. When I test code from console, it generates data and pulls from the one, and when I knit the markdown, it generates and pulls from the other.
 ## Step 3 - `r-reticulate` virtual environment
 
-I could not figure out how to force reticulate to use the right version of python and have access to python packages without creating a virtual environment. Also, I _barely_ understand virtual environments, so I'm sure there are redundancies. But I'm superstitious so once i got something that worked from scratch, I stopped.  The below code block must be executed in Rstudio before knitting to set things up:
+I could not figure out how to force reticulate to use the right version of python and have access to python packages without creating a virtual environment. There are probably some redudancies in the setup.
+
+
+The below code block must be executed in Rstudio before knitting to set things up to create the virtual environment and make sure pyton 3.9 is included in it:
 
 ```{r, eval=FALSE}
 ###############################################################################
