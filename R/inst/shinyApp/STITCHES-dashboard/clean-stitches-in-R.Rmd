@@ -147,7 +147,7 @@ print(archive_data.head())
 #### python block ####
 my_recipes = stitches.make_recipe(target_data, archive_data,
                                   non_tas_variables=['pr', 'psl', 'hurs'],
-                                  tol = 0.15, N_matches = 10000,
+                                  tol = 0.14, N_matches = 10000,
                                   reproducible = True)
 print(my_recipes.head())
 ```

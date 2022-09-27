@@ -209,7 +209,7 @@ print(archive_data.head())
 
 my_recipes = stitches.make_recipe(target_data, archive_data,
                                   non_tas_variables=['pr', 'psl', 'hurs'],
-                                  tol = 0.13, N_matches = 10000, reproducible = True)
+                                  tol = 0.14, N_matches = 10000, reproducible = True)
 
 print(my_recipes.head())
 ```
@@ -220,7 +220,7 @@ Unless otherwise specified by the argument `reproducible = True`, the draws stit
 
 my_recipes2 = stitches.make_recipe(target_data, archive_data,
                                   non_tas_variables=['pr', 'psl', 'hurs'],
-                                  tol = 0.13, N_matches = 10000)
+                                  tol = 0.14, N_matches = 10000)
 
 ```
 Within each of these ensembles, there's no envelope collapse. If we were to concatenate them together into
