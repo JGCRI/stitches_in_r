@@ -19,7 +19,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # Setup
 
 ## R
-```{r}
+```{r r-library}
 #### R  BLOCK ####
 library(reticulate)
 # # indicate that we want to use a specific virtualenv
@@ -35,7 +35,7 @@ map_time <- '2100-12-31'
 ```
 
 ## python
-```{python}
+```{python py-imports}
 #### Python Block ####
 import stitches 
 import pandas as pd
@@ -53,7 +53,7 @@ vars1 = ['tas', 'pr', 'hurs', 'psl']
 
 # Load Hector data
 pulled a quick rcp4.5 from HectorUI
-```{r}
+```{r load-hector}
 #### R  BLOCK ####
 hector_tgav <- read.csv('data/Hector-data-2022-09-22.csv', skip=3, stringsAsFactors = FALSE)
 hector_exp <- unique(hector_tgav$scenario)
@@ -66,7 +66,7 @@ head(hector_tgav)
 First we reshape the Hector time series to match the CMIP6 ESM GSAT smooth anomaly time series that STITCHES operates on:
 NOTE we should probably add this as a function to stitches 
 NOTE Hector time series start in 1800 - there's no science reason we couldn't do matching over that window and have a gridded netcdf of an extra 50 years of history. 
-```{r}
+```{r prep-hector-r}
 #### R  BLOCK ####
 hector_tgav %>%
     mutate(variable = 'tas',
@@ -84,7 +84,7 @@ print(head(target_tgav))
 
 Now that we have shaped it as stitches is expecting, we can use stitches functions to calculate the matching windows for this target data
 
-```{python}
+```{python prep-hector-py}
 #### Python Block ####
 # smooth out Hector's historic volcano stuff and
 # save off the smoothed Hector time series we actually use for matching so can plot later:      
@@ -99,7 +99,7 @@ print(target_data.head())
 
 # Load the stitches archive data for matching
 
-```{python, echo=FALSE}
+```{python stitch-archive, echo=FALSE}
 exps = ['ssp126', 'ssp245', 'ssp370', 'ssp460', 'ssp585']
 # pangeo table of ESMs for reference
 pangeo_path = pkg_resources.resource_filename('stitches', 'data/pangeo_table.csv')
@@ -143,7 +143,7 @@ print(archive_data.head())
 ```
 
 # Match
-```{python}
+```{python stitch-recipes}
 #### python block ####
 my_recipes = stitches.make_recipe(target_data, archive_data,
                                   non_tas_variables=['pr', 'psl', 'hurs'],
@@ -161,7 +161,7 @@ a super-ensemble, there would be. So it's not as powerful as a very large ensemb
 
 # stitch Tgav
 
-```{python}
+```{python stitch-tgav}
 #### python block ####
 stitched_global_temp = stitches.gmat_stitching(my_recipes)
 print(stitched_global_temp.head())
@@ -169,7 +169,7 @@ print(stitched_global_temp.head())
 
 
 # plot Tgav
-```{r, echo = FALSE}
+```{r plot-tgav, echo = FALSE}
 #### R block ####
 stitched_tgav <- py$stitched_global_temp
 
@@ -196,7 +196,7 @@ ggplot(data = stitched_tgav, aes(x= year, y = value, color = stitching_id)) +
 Using the above recipes, stitches can produce new gridded netcdf files for each recipe, for multiple variables. 
 Creating multiple netcdfs of monthly data is slower than focusing on GSAT. Still much faster than an ESM, and once the recipes are set, very parallelizable. But for tractability, we are just going to stitch the gridded netcdfs for one generated ensemble member.
 
-```{python}
+```{python grid-recipe}
 #### python block ####
 # Just do one realization
 recipe = my_recipes[my_recipes['stitching_id'] == 'RCP  Standard-RCP-4.5~hectorUI1~1'].reset_index(drop=True).copy()
@@ -207,18 +207,18 @@ recipe = my_recipes[my_recipes['stitching_id'] == 'RCP  Standard-RCP-4.5~hectorU
 We must specify a directory for the netcdfs to be saved to. We will use simply do it directly here.
 On my computer, constructing these 4 netcdfs took ~2-3 minutes.
 
-```{python}
+```{python stitch-grid}
 #### python block ####
 stitches.gridded_stitching(out_dir='data', rp =recipe)
 ```
 
 
-# plot gridded
+# plot gridded setup
 
 - we will do maps of all 4 variables at a specified month and year
 - we will do a time series of each variable in a specific grid cell
 
-```{r, echo=FALSE}
+```{r nc-file-list, echo=FALSE}
 #### R block ####
 # pull all netcdfs:
 files <- list.files('data', pattern  = '.nc', full.names = TRUE)
@@ -234,46 +234,57 @@ print(files)
 
 
 
-# python maps and time series
-
 It's a lot easier to use python to load in the netcdfs and select a grid cell or a time slice, save those off as simpler data frames than a full netcdf, and plot in R. The reshaping set of code that we often do in R to work with netcdf data is just so much faster if we've pre-sliced the data to a single grid cell or single time step in python.
 
 
-
-## tas 
-TODO just make it a function
-```{python}
+```{python nc-subset-helper, echo=FALSE}
 #### python block ####
+
 py_files = pd.DataFrame(r.files, columns = ['file_name'])
 
-# load the netcdf:
-f = py_files.loc[py_files['file_name'].str.contains('tas')].values[0]
-tas_nc = xr.open_dataset(f[0])
+# helper functions for doing the data selecting from the netcdfs 
+# before passing to an R block for light, quick reshaping and
+# plotting.
 
-# time slice map:
-tas_time_slice = tas_nc.sel(time = r.map_time).copy()
+def select_time_grid_slice(varname, time_slice = r.map_time, grid_lon = 180 + 76.9378, grid_lat = 38.9897 ):
+  # load the netcdf:
+  f = py_files.loc[py_files['file_name'].str.contains(varname)].values[0]
+  nc = xr.open_dataset(f[0])
+  
+  ###########
+  # time slice for map:
+  time_slice = nc.sel(time = r.map_time).copy()
+  
+  ###########
+  # time series for single grid cell:
+  # lon and lat values for a grid cell near College Park, MD, home of JGCRI:
+  cp_lat = grid_lat
+  cp_lon = grid_lon
+  
+  # lat and lon coordinates closest
+  abslat = np.abs(nc.lat - cp_lat)
+  abslon = np.abs(nc.lon-cp_lon)
+  c = np.maximum(abslon, abslat)
+  ([lon_loc], [lat_loc]) = np.where(c == np.min(c))
+  lon_grid = nc.lon[lon_loc]
+  lat_grid = nc.lat[lat_loc]
+  
+  grid_slice = nc.sel(lon = lon_grid, lat=lat_grid, time = slice('1850-01-01', '2099-12-31')).copy()
+  
+  
+  return([time_slice, grid_slice])
 
-
-# time series for single grid cell:
-# lon and lat values for a grid cell near College Park, MD, home of JGCRI:
-cp_lat = 38.9897
-cp_lon = 180 + 76.9378 # this is probably not actually right 
-
-# lat and lon coordinates closest
-abslat = np.abs(tas_nc.lat - cp_lat)
-abslon = np.abs(tas_nc.lon-cp_lon)
-c = np.maximum(abslon, abslat)
-([lon_loc], [lat_loc]) = np.where(c == np.min(c))
-lon_grid = tas_nc.lon[lon_loc]
-lat_grid = tas_nc.lat[lat_loc]
-
-tas_grid_slice = tas_nc.sel(lon = lon_grid, lat=lat_grid,
-                         time = slice('1850-01-01', '2099-12-31')).copy()
-del(tas_nc)
 ```
 
-Take a look at this data in R:
-```{r}
+# tas 
+
+```{python subset-tas}
+#### python block ####
+[tas_time_slice, tas_grid_slice] = select_time_grid_slice(varname='tas')
+```
+
+Take a look at this data in R and plot it
+```{r plot-tas, echo=FALSE}
 #### R block ####
 # map data:
 print(py$tas_time_slice$tas)
@@ -316,38 +327,14 @@ ggplot(cbind(cp_time, cp_tas) %>% filter(year >= 2021), aes(x = time_index, y = 
 
 
 
-## pr
-```{python}
-py_files = pd.DataFrame(r.files, columns = ['file_name'])
-
-# load the netcdf:
-f = py_files.loc[py_files['file_name'].str.contains('pr')].values[0]
-pr_nc = xr.open_dataset(f[0])
-
-# time slice map:
-pr_time_slice = pr_nc.sel(time = r.map_time).copy()
-
-
-# time series for single grid cell:
-# lon and lat values for a grid cell near College Park, MD, home of JGCRI:
-cp_lat = 38.9897
-cp_lon = 180 + 76.9378 # this is probably not actually right 
-
-# lat and lon coordinates closest
-abslat = np.abs(pr_nc.lat - cp_lat)
-abslon = np.abs(pr_nc.lon-cp_lon)
-c = np.maximum(abslon, abslat)
-([lon_loc], [lat_loc]) = np.where(c == np.min(c))
-lon_grid = pr_nc.lon[lon_loc]
-lat_grid = pr_nc.lat[lat_loc]
-
-pr_grid_slice = pr_nc.sel(lon = lon_grid, lat=lat_grid,
-                         time = slice('1850-01-01', '2099-12-31')).copy()
-del(pr_nc)
+# pr
+```{python subset-pr}
+#### python block ####
+[pr_time_slice, pr_grid_slice] = select_time_grid_slice(varname='pr')
 ```
 
 Take a look at this data in R:
-```{r}
+```{r plot-pr, echo=FALSE}
 # map data:
 print(py$pr_time_slice$pr)
 pr_val <- py$pr_time_slice$pr$values
@@ -385,38 +372,14 @@ ggplot(cbind(cp_time, cp_pr) %>% filter(year >= 2021), aes(x = time_index, y = v
 
 ```
 
-## hurs
-```{python}
-py_files = pd.DataFrame(r.files, columns = ['file_name'])
-
-# load the netcdf:
-f = py_files.loc[py_files['file_name'].str.contains('hurs')].values[0]
-hurs_nc = xr.open_dataset(f[0])
-
-# time slice map:
-hurs_time_slice = hurs_nc.sel(time = r.map_time).copy()
-
-
-# time series for single grid cell:
-# lon and lat values for a grid cell near College Park, MD, home of JGCRI:
-cp_lat = 38.9897
-cp_lon = 180 + 76.9378 # this is probably not actually right 
-
-# lat and lon coordinates closest
-abslat = np.abs(hurs_nc.lat - cp_lat)
-abslon = np.abs(hurs_nc.lon-cp_lon)
-c = np.maximum(abslon, abslat)
-([lon_loc], [lat_loc]) = np.where(c == np.min(c))
-lon_grid = hurs_nc.lon[lon_loc]
-lat_grid = hurs_nc.lat[lat_loc]
-
-hurs_grid_slice = hurs_nc.sel(lon = lon_grid, lat=lat_grid,
-                         time = slice('1850-01-01', '2099-12-31')).copy()
-del(hurs_nc)
+# hurs
+```{python subset-hurs}
+#### python block ####
+[hurs_time_slice, hurs_grid_slice] = select_time_grid_slice(varname='hurs')
 ```
 
 Take a look at this data in R:
-```{r}
+```{r plot-hurs, echo = FALSE}
 # map data:
 print(py$hurs_time_slice$hurs)
 hurs_val <- py$hurs_time_slice$hurs$values
@@ -454,24 +417,17 @@ ggplot(cbind(cp_time, cp_hurs) %>% filter(year >= 2021), aes(x = time_index, y =
 
 ```
 
-## psl
+# psl
 
-sea level pressure can't have a CP time series
-```{python}
-py_files = pd.DataFrame(r.files, columns = ['file_name'])
-
-# load the netcdf:
-f = py_files.loc[py_files['file_name'].str.contains('psl')].values[0]
-psl_nc = xr.open_dataset(f[0])
-
-# time slice map:
-psl_time_slice = psl_nc.sel(time = r.map_time).copy()
-del(psl_nc)
-
+sea level pressure doesn't make a ton of sense to plot for the grid slice
+```{python subset-psl}
+#### python block ####
+[psl_time_slice, psl_grid_slice] = select_time_grid_slice(varname='psl')
+del(psl_grid_slice)
 ```
 
 Take a look at this data in R:
-```{r}
+```{r plot-psl, echo=FALSE}
 # map data:
 print(py$psl_time_slice$psl)
 psl_val <- py$psl_time_slice$psl$values
