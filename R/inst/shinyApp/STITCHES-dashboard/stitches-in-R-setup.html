@@ -1583,13 +1583,31 @@ returned</p></li>
 <li><p>no worked fine, so went that direction</p></li>
 <li><p>because I didn’t install the compiled version, I can’t execute
 python blocks in Rstudio like I would an R block without knitting. They
-only execute when I knit. I can test python code in the Rstudio console
-once everything is set up with
-<code>reticulate::repl_python()</code></p></li>
+only execute when I knit.</p></li>
+<li><p>can test python code in the Rstudio console once everything is
+set up with <code>reticulate::repl_python()</code> (which turns the
+console into a python console until you use type <code>quit</code> to
+return it to R). This helps with developing code and switching
+dynamically between R and python blocks.</p></li>
+<li><p>Two catches with this:</p></li>
 </ul>
-</div>
-<div id="step-3---r-reticulate-virtual-environment" class="section level2">
-<h2>Step 3 - <code>r-reticulate</code> virtual environment</h2>
+<ol style="list-style-type: decimal">
+<li><p>if you want to execute a for loop in the console via
+<code>reticulate::repl_python()</code>, you have to run JUST the for
+loop and you’ll have to hit enter twice to get it to correctly execute
+the for loop. If you just include a for loop in a block of commands you
+paste in and run all at once, it will basically just execute the first
+iteration of the for loop. This is not a problem when knitting the
+entire markdown.</p></li>
+<li><p>Because of the nesting of the <code>STITCHES-dashboard</code>
+directory in this R project, the markdown will look for any data
+directories in <code>STITCHES-dashboard</code>. The console will look
+for any data directories in the same level as the R project. I got
+around it by a copy of a <code>data</code> directory in each place. When
+I test code from console, it generates data and pulls from the one, and
+when I knit the markdown, it generates and pulls from the other. ## Step
+3 - <code>r-reticulate</code> virtual environment</p></li>
+</ol>
 <p>I could not figure out how to force reticulate to use the right
 version of python and have access to python packages without creating a
 virtual environment. Also, I <em>barely</em> understand virtual

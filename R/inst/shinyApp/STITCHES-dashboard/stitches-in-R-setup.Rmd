@@ -59,8 +59,15 @@ standard `install.packages("reticulate")`
 - I had issues with yes and couldn't track down the errors returned
 - no worked fine, so went that direction
 
-- because I didn't install the compiled version, I can't execute python blocks in Rstudio like I would an R block without knitting. They only execute when I knit. I can test python code in the Rstudio console once everything is set up with `reticulate::repl_python()`
+- because I didn't install the compiled version, I can't execute python blocks in Rstudio like I would an R block without knitting. They only execute when I knit. 
 
+- can test python code in the Rstudio console once everything is set up with `reticulate::repl_python()` (which turns the console into a python console until you use type `quit` to return it to R). This helps with developing code and switching dynamically between R and python blocks. 
+
+- Two catches with this:
+
+1. if you want to execute a for loop in the console via `reticulate::repl_python()`, you have to run JUST the for loop and you'll have to hit enter twice to get it to correctly execute the for loop. If you just include a for loop in a block of commands you paste in and run all at once, it will basically just execute the first iteration of the for loop. This is not a problem when knitting the entire markdown.
+
+2. Because of the nesting of the `STITCHES-dashboard` directory in this R project, the markdown will look for any data directories in `STITCHES-dashboard`. The console will look for any data directories in the same level as the R project. I got around it by a copy of a `data` directory in each place. When I test code from console, it generates data and pulls from the one, and when I knit the markdown, it generates and pulls from the other.
 ## Step 3 - `r-reticulate` virtual environment
 
 I could not figure out how to force reticulate to use the right version of python and have access to python packages without creating a virtual environment. Also, I _barely_ understand virtual environments, so I'm sure there are redundancies. But I'm superstitious so once i got something that worked from scratch, I stopped.  The below code block must be executed in Rstudio before knitting to set things up:
