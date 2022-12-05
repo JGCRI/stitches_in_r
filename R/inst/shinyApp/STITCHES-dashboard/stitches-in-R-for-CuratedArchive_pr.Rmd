@@ -112,6 +112,9 @@ for esmname in esm:
             x = x_avg['pr'].values.copy()
             df_sum = (x + df_sum).copy()
             n_good_files = n_good_files + 1
+            if (i==0):
+              ensemble_ds = x_avg.copy()
+          
             
         
         if (exp == 'historical'):
@@ -122,10 +125,11 @@ for esmname in esm:
             x = x_avg['pr'].values.copy()
             df_sum = (x + df_sum).copy()
             n_good_files = n_good_files + 1
+            if (i==0):
+              ensemble_ds = x_avg.copy()
             
         
-        if (i==0):
-          ensemble_ds = x_avg.copy()
+        
         
         del(x)
         del(x_avg)
