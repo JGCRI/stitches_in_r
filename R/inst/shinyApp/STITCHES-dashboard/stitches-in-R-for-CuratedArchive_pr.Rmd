@@ -31,10 +31,9 @@ library(tidyr)
 library(ggplot2)
 ```
 
-```{r r-settings}
-comparison_region <- 'USA'
+- run the above block, then go to the terminal tab in Rstudio and do `pip install rioxarray` because I cannot figure out any other way to do the masking. Then do `pip install geopandas` so that we can use the geopandas shape files because I am ready to cry. and `rtree` and `cartopy`
 
-map_region <- ggplot2::map_data(tolower(comparison_region))
+```{r r-settings}
 
 pr_ref_start <- '1995-01-01'
 pf_ref_end <-   '2014-12-31'
@@ -43,6 +42,19 @@ pr_comp_start <- '2080-01-01'
 pf_comp_end <-   '2099-12-31'
 
 window_length <- 20
+
+
+map_info <- readRDS('data/rmap_tethys_grid_basin_region_country.rds')
+map_info %>% 
+  filter(regionName == 'USA',
+         basinName != 'Hawaii',
+         basinName != 'Pacific_and_Arctic_Coast',
+         basinName != 'Siberia_West_Coast') %>%
+  mutate(singleID = paste0(Longitude, '~', Latitude)) %>%
+  rename(lon = Longitude, lat = Latitude) %>%
+  select(-gridID, -ilon, -ilat, -basinID, -regionID, - countryID) %>%
+  distinct->
+  map_info
 ```
 
 ## python
@@ -65,6 +77,22 @@ esm = ['CAMS-CSM1-0', 'MIROC6', 'GFDL-ESM4', 'FGOALS-g3',
 'ACCESS-ESM1-5', 'IPSL-CM6A-LR', 'CESM2-WACCM',
 'UKESM1-0-LL', 'CanESM5']
 vars1 = ['pr']
+```
+
+# python - use the geopandas shape files to set region to calculate on
+
+```{python shapefile}
+#import rtree
+import geopandas as gpd
+from shapely.geometry import mapping, Polygon
+#import cartopy.crs as ccrs
+
+# create contiguous US polygon for clipping CMIP5 data
+world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
+US=world[world['name']=='United States of America']  # conus, AK, HI, PR
+conus_poly = Polygon([(-126, 24), (-126, 50), (-66, 50), (-66, 24), (-126, 24)]) # conus box
+# conus=gpd.clip(US,conus_poly) #cut out AK, HI, PR
+# conus.geometry
 ```
 
 # Load the pangeo dataframe
@@ -90,9 +118,11 @@ print(pangeo_data.head())
 ## python: ensemble average values in time window by ESM-Experiment-gridcell
 ```{python pr_loop}
 #### python block ####
-pr_holder = {}
-for esmname in esm:
-  for exp in exps:
+mapinfo <- r.map_info
+
+pr_holder = pd.DataFrame()
+for esmname in esm[0:1]:
+  for exp in exps[0:2]:
 
     filelist = pangeo_data[(pangeo_data['model'] ==esmname) & (pangeo_data['experiment'] == exp)].copy()
     
@@ -109,11 +139,14 @@ for esmname in esm:
           
           if (len(x.time) >= 12*r.window_length):
             x_avg = x.mean('time').copy()
-            x = x_avg['pr'].values.copy()
-            df_sum = (x + df_sum).copy()
+            x2 = x_avg['pr'].values.copy()
+            df_sum = (x2 + df_sum).copy()
             n_good_files = n_good_files + 1
             if (i==0):
               ensemble_ds = x_avg.copy()
+          else:
+            x=0
+            x_avg=0
           
             
         
@@ -122,43 +155,64 @@ for esmname in esm:
           
           if (len(x.time) >= 12*r.window_length):
             x_avg = x.mean('time').copy()
-            x = x_avg['pr'].values.copy()
-            df_sum = (x + df_sum).copy()
+            x2 = x_avg['pr'].values.copy()
+            df_sum = (x2 + df_sum).copy()
             n_good_files = n_good_files + 1
             if (i==0):
               ensemble_ds = x_avg.copy()
-            
-        
-        
-        
+          else:
+            x=0
+            x_avg=0
+
+
         del(x)
+        del(x2)
         del(x_avg)
       
       df_ens_avg = (df_sum/n_good_files).copy()
       ensemble_ds['pr'].values = df_ens_avg.copy()
       
+      # spatial masking
+      for j in range(len(r.map_info)):
+        
+        map_lon = r.map_info.iloc[j].lon +360
+        map_lat = r.map_info.iloc[j].lat
+        
+        extracted_cell = ensemble_ds.sel(lon = map_lon, lat = map_lat, method = 'nearest')
+        
+        grid_val = extracted_cell.pr.values.copy()
+        weight = np.cos(np.deg2rad(extracted_cell.lat.values))
+        
+        pr_holder = pr_holder.append(pd.DataFrame({'esm':[esmname],
+        'experiment':[exp],
+        'map_lon': [map_lon],
+        'map_lat': [map_lat],
+        'data_lon': [extracted_cell.lon.values],
+        'data_lat': [extracted_cell.lat.values],
+        'ens_pr': [grid_val],
+        'area_weight':[weight]})
+        ).copy()
+        
+
+        
       del(df_sum)
       del(df_ens_avg)
       del(n_good_files)
       
-      pr_holder[esmname+'~'+exp] = ensemble_ds
-      del(ensemble_ds)
+    pr_holder[esmname+'~'+exp] = ensemble_ds
+    print(pr_holder)
+    #del(ensemble_ds)
 
 ```
 
-Unless otherwise specified by the argument `reproducible = True`, the draws stitches takes from the pool of matches is stochastic. 
+# mask to region and average
 
-Within each of these ensembles, there's no envelope collapse. If we were to concatenate them together into
-a super-ensemble, there would be. So it's not as powerful as a very large ensemble of collapse free realizations but it's still a distinct ensemble to consider.
+```{r region}
+pr <- py$pr_holder
+saveRDS(pr, 'pr_ensembles.rds')
 
 
-
-# stitch Tgav
-
-```{python stitch-tgav}
-#### python block ####
-stitched_global_temp = stitches.gmat_stitching(my_recipes)
-print(stitched_global_temp.head())
+pr_reshape <- lapply(pr, function())
 ```
 
 
