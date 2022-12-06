@@ -79,22 +79,6 @@ esm = ['CAMS-CSM1-0', 'MIROC6', 'GFDL-ESM4', 'FGOALS-g3',
 vars1 = ['pr']
 ```
 
-# python - use the geopandas shape files to set region to calculate on
-
-```{python shapefile}
-#import rtree
-import geopandas as gpd
-from shapely.geometry import mapping, Polygon
-#import cartopy.crs as ccrs
-
-# create contiguous US polygon for clipping CMIP5 data
-world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
-US=world[world['name']=='United States of America']  # conus, AK, HI, PR
-conus_poly = Polygon([(-126, 24), (-126, 50), (-66, 50), (-66, 24), (-126, 24)]) # conus box
-# conus=gpd.clip(US,conus_poly) #cut out AK, HI, PR
-# conus.geometry
-```
-
 # Load the pangeo dataframe
 
 ```{python pangeodata}
@@ -118,11 +102,9 @@ print(pangeo_data.head())
 ## python: ensemble average values in time window by ESM-Experiment-gridcell
 ```{python pr_loop}
 #### python block ####
-mapinfo <- r.map_info
-
 pr_holder = pd.DataFrame()
-for esmname in esm[0:1]:
-  for exp in exps[0:2]:
+for esmname in esm:
+  for exp in exps:
 
     filelist = pangeo_data[(pangeo_data['model'] ==esmname) & (pangeo_data['experiment'] == exp)].copy()
     
@@ -171,36 +153,43 @@ for esmname in esm[0:1]:
       
       df_ens_avg = (df_sum/n_good_files).copy()
       ensemble_ds['pr'].values = df_ens_avg.copy()
-      
-      # spatial masking
-      for j in range(len(r.map_info)):
-        
-        map_lon = r.map_info.iloc[j].lon +360
-        map_lat = r.map_info.iloc[j].lat
-        
-        extracted_cell = ensemble_ds.sel(lon = map_lon, lat = map_lat, method = 'nearest')
-        
-        grid_val = extracted_cell.pr.values.copy()
-        weight = np.cos(np.deg2rad(extracted_cell.lat.values))
-        
-        pr_holder = pr_holder.append(pd.DataFrame({'esm':[esmname],
-        'experiment':[exp],
-        'map_lon': [map_lon],
-        'map_lat': [map_lat],
-        'data_lon': [extracted_cell.lon.values],
-        'data_lat': [extracted_cell.lat.values],
-        'ens_pr': [grid_val],
-        'area_weight':[weight]})
-        ).copy()
-        
-
-        
       del(df_sum)
       del(df_ens_avg)
       del(n_good_files)
       
-    pr_holder[esmname+'~'+exp] = ensemble_ds
-    print(pr_holder)
+      
+      
+      # spatial masking
+      for j in range(len(r.map_info)):
+
+        map_lon = r.map_info.iloc[j].lon +360
+        map_lat = r.map_info.iloc[j].lat
+
+        extracted_cell = ensemble_ds.sel(lon = map_lon, lat = map_lat, method = 'nearest')
+
+        grid_val = extracted_cell.pr.values.copy()
+        weight = np.cos(np.deg2rad(extracted_cell.lat.values))
+
+        df = pd.DataFrame({'esm':[esmname],
+        'experiment':[exp],
+        'map_lon': [map_lon],
+        'map_lat': [map_lat],
+        'data_lon': [float(extracted_cell.lon.values)],
+        'data_lat': [float(extracted_cell.lat.values)],
+        'ens_pr': [float(grid_val)],
+        'area_weight':[weight]})
+        
+        pr_holder = pd.concat([pr_holder, df]).copy()
+        del(df)
+        del(weight)
+        del(grid_val)
+        del(map_lon)
+        del(map_lat)
+        del(extracted_cell)
+        
+        
+
+        
     #del(ensemble_ds)
 
 ```
