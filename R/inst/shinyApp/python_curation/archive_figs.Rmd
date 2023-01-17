@@ -1,0 +1,320 @@
+---
+title: "archive figures"
+author: "ACS"
+date: '2023-01-16'
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+
+library(ggplot2)
+library(dplyr)
+
+```
+
+# Global tas
+
+## r1 only
+Note for UKESM, a couple scenarios don't have r1, just r30-r40 and I was too tired to write yet another special case for UKESM so those get omitted 
+
+```{r, echo = FALSE}
+x <- read.csv('global_tas_allesms_r1only.csv', stringsAsFactors = F)
+
+
+
+x %>%
+    filter(experiment == 'historical') %>%
+    rename(historical_ens = ens_avg,
+           historical_sd = ens_avg_sd,
+           historical_iasd = ens_avg_iasd) %>%
+    select(-experiment) %>%
+    distinct %>%
+    mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
+           ECS_order = as.integer(row.names(.))) ->
+    historicaltas
+
+x %>%
+    filter(experiment != 'historical') %>%
+    left_join(historicaltas, by = c('esm', 'var')) %>%
+    mutate(ens_avg = if_else(ens_avg == -999, Inf, ens_avg),
+           ens_avg_sd = if_else(ens_avg_sd ==-999, Inf, ens_avg_sd),
+           ens_avg_iasd = if_else(ens_avg_iasd == -999, Inf, ens_avg_iasd)) %>%
+    mutate(pct_change = 100 * (ens_avg - historical_ens)/historical_ens,
+           change = ens_avg-historical_ens,
+           change_iasd = ens_avg_iasd - historical_iasd) ->
+    plot_tas
+```
+
+### change
+
+```{r, echo=FALSE}
+
+p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
+                           experiment != 'ssp460',
+                           experiment != 'ssp434',
+                           experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
+    #scale_fill_distiller(palette = 'BrBG', direction = -1) +
+    scale_fill_gradient(low = 'yellowgreen', high = 'firebrick3') +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Change in r1 2080-2099 average \nglobal', unique(plot_tas$var), 'from 1995-2014 global'))
+
+# ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_change.png'), p1, width = 6, height = 4, units='in')
+
+p2 <- ggplot(plot_tas) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
+    #scale_fill_distiller(palette = 'BrBG', direction = -1) +
+    scale_fill_gradient(low = 'yellowgreen', high = 'firebrick3') +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Change in r1 2080-2099 average \nglobal', unique(plot_tas$var), 'from 1995-2014 global'))
+
+# ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_change_overshoots.png'), p2, width = 6, height = 6, units='in')
+
+p1
+p2
+```
+
+### interannual sd
+```{r, echo=F}
+p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
+                           experiment != 'ssp460',
+                           experiment != 'ssp434',
+                           experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
+    # scale_fill_gradientn(colors = rev(rainbow(3))) +
+    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
+                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
+    # scale_fill_gradientn(colours = c('blue', 'green', 'firebrick3'),
+    #                      values = scales::rescale(c(0.08, 0.14,0.2))) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('r1 2080-2099 interannual sd \nglobal', unique(plot_tas$var)))
+
+#ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_ia_sd.png'), p1, width = 6, height = 4, units='in')
+
+p2 <- ggplot(plot_tas) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
+    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
+                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('r1 2080-2099 interannual sd \nglobal', unique(plot_tas$var)))
+
+#ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), 'ia_sd_overshoots.png'), p2, width = 6, height = 6, units='in')
+
+p1
+
+```
+
+### interannual sd 2015-2100
+```{r, echo = FALSE}
+x <- read.csv('global_tas_allesms_r1only.csv', stringsAsFactors = F)
+
+
+
+x %>%
+    filter(experiment == 'historical') %>%
+    rename(historical_ens = ens_avg,
+           historical_sd = ens_avg_sd,
+           historical_iasd = ens_avg_iasd) %>%
+    select(-experiment) %>%
+    distinct %>%
+    mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
+           ECS_order = as.integer(row.names(.))) ->
+    historicaltas
+
+x %>%
+    filter(experiment != 'historical') %>%
+    left_join(historicaltas, by = c('esm', 'var')) %>%
+    mutate(ens_avg = if_else(ens_avg == -999, Inf, ens_avg),
+           ens_avg_sd = if_else(ens_avg_sd ==-999, Inf, ens_avg_sd),
+           ens_avg_iasd = if_else(ens_avg_iasd == -999, Inf, ens_avg_iasd)) %>%
+    mutate(pct_change = 100 * (ens_avg - historical_ens)/historical_ens,
+           change = ens_avg-historical_ens,
+           change_iasd = ens_avg_iasd - historical_iasd) ->
+    plot_tas
+
+p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
+                           experiment != 'ssp460',
+                           experiment != 'ssp434',
+                           experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
+    # scale_fill_gradientn(colors = rev(rainbow(3))) +
+    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
+                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
+    # scale_fill_gradientn(colours = c('blue', 'green', 'firebrick3'),
+    #                      values = scales::rescale(c(0.08, 0.14,0.2))) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('r1 2015-2099 interannual sd \nglobal', unique(plot_tas$var)))
+
+p1
+```
+
+
+## Ensemble average 
+```{r, echo = FALSE}
+x <- read.csv('global_tas_allesms.csv', stringsAsFactors = F)
+
+
+
+x %>%
+    filter(experiment == 'historical') %>%
+    rename(historical_ens = ens_avg,
+           historical_sd = ens_avg_sd,
+           historical_iasd = ens_avg_iasd) %>%
+    select(-experiment) %>%
+    distinct %>%
+    mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
+           ECS_order = as.integer(row.names(.))) ->
+    historicaltas
+
+x %>%
+    filter(experiment != 'historical') %>%
+    left_join(historicaltas, by = c('esm', 'var')) %>%
+    mutate(ens_avg = if_else(ens_avg == -999, Inf, ens_avg),
+           ens_avg_sd = if_else(ens_avg_sd ==-999, Inf, ens_avg_sd),
+           ens_avg_iasd = if_else(ens_avg_iasd == -999, Inf, ens_avg_iasd)) %>%
+    mutate(pct_change = 100 * (ens_avg - historical_ens)/historical_ens,
+           change = ens_avg-historical_ens,
+           change_iasd = ens_avg_iasd - historical_iasd) ->
+    plot_tas
+```
+
+### tas change
+
+```{r, echo=FALSE}
+
+p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
+                           experiment != 'ssp460',
+                           experiment != 'ssp434',
+                           experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
+    #scale_fill_distiller(palette = 'BrBG', direction = -1) +
+    scale_fill_gradient(low = 'yellowgreen', high = 'firebrick3') +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Change in ensemble average 2080-2099 average \nglobal', unique(plot_tas$var), 'from 1995-2014 global'))
+
+ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_change.png'), p1, width = 6, height = 4, units='in')
+
+p2 <- ggplot(plot_tas) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
+    #scale_fill_distiller(palette = 'BrBG', direction = -1) +
+    scale_fill_gradient(low = 'yellowgreen', high = 'firebrick3') +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Change in ensemble average 2080-2099 average \nglobal', unique(plot_tas$var), 'from 1995-2014 global'))
+
+ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_change_overshoots.png'), p2, width = 6, height = 6, units='in')
+
+p1
+p2
+```
+
+### interannual sd
+```{r, echo=F}
+p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
+                           experiment != 'ssp460',
+                           experiment != 'ssp434',
+                           experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
+    # scale_fill_gradientn(colors = rev(rainbow(3))) +
+    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
+                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
+    # scale_fill_gradientn(colours = c('blue', 'green', 'firebrick3'),
+    #                      values = scales::rescale(c(0.08, 0.14,0.2))) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Ensemble average 2080-2099 interannual sd \nglobal', unique(plot_tas$var)))
+
+ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_ia_sd.png'), p1, width = 6, height = 4, units='in')
+
+p2 <- ggplot(plot_tas) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
+    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
+                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Ensemble average 2080-2099 interannual sd \nglobal', unique(plot_tas$var)))
+
+ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), 'ia_sd_overshoots.png'), p2, width = 6, height = 6, units='in')
+
+p1
+p2
+```
+
+
+
+### interannual sd 2015 - 2100 
+
+```{r, echo = FALSE}
+x <- read.csv('global_tas_allesms_2015_2100.csv', stringsAsFactors = F)
+
+
+
+x %>%
+    filter(experiment == 'historical') %>%
+    rename(historical_ens = ens_avg,
+           historical_sd = ens_avg_sd,
+           historical_iasd = ens_avg_iasd) %>%
+    select(-experiment) %>%
+    distinct %>%
+    mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
+           ECS_order = as.integer(row.names(.))) ->
+    historicaltas
+
+x %>%
+    filter(experiment != 'historical') %>%
+    left_join(historicaltas, by = c('esm', 'var')) %>%
+    mutate(ens_avg = if_else(ens_avg == -999, Inf, ens_avg),
+           ens_avg_sd = if_else(ens_avg_sd ==-999, Inf, ens_avg_sd),
+           ens_avg_iasd = if_else(ens_avg_iasd == -999, Inf, ens_avg_iasd)) %>%
+    mutate(pct_change = 100 * (ens_avg - historical_ens)/historical_ens,
+           change = ens_avg-historical_ens,
+           change_iasd = ens_avg_iasd - historical_iasd) ->
+    plot_tas
+```
+
+```{r, echo=F}
+p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
+                           experiment != 'ssp460',
+                           experiment != 'ssp434',
+                           experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
+    # scale_fill_gradientn(colors = rev(rainbow(3))) +
+    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
+                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
+    # scale_fill_gradientn(colours = c('blue', 'green', 'firebrick3'),
+    #                      values = scales::rescale(c(0.08, 0.14,0.2))) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Ensemble average 2015-2099 interannual sd \nglobal', unique(plot_tas$var)))
+
+ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_ia_sd_2015-2100.png'), p1, width = 6, height = 4, units='in')
+
+p2 <- ggplot(plot_tas) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
+    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
+                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Ensemble average 2015-2099 interannual sd \nglobal', unique(plot_tas$var)))
+
+ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), 'ia_sd_overshoots_2015_2100.png'), p2, width = 6, height = 6, units='in')
+
+p1
+p2
+```
+
+
+# CONUS
