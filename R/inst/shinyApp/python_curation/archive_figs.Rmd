@@ -12,242 +12,521 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
-
-
+#TODO harmonize color bars? at least for precip so it has brown for decreases
 library(ggplot2)
 library(dplyr)
+library(tidyr)
 
 ```
+# Notes on work flow
+
+Python:
+
+1. For each ESM-experiment-ensemble member’s monthly temperature data 
+2. mask to region of interest (or not if global) 
+3. mask to the time window of interest for the experiment (2015-2099 for projections, 1995-2014 for historical) and make sure it has complete data in that window
+4. calculate latitude weighted average temperature (globally or for the area of interest, depending) for each month in each year 
+5. take the average of the 12 month values each year to get annual value  in each year for each ESM-experiment-ensemble member
+6. output these time series for the area of interest
+
+R (this notebook):
+
+- detrend each ensemble member's time series by calculating the loess residuals 
+- calculate interannual standard deviation of each ensemble member's time series as `sd((residuals))`
+- calculate the 2080-2099 (or 1995-2014) average value (not detrended) across years for each ensemble member
+
+- for each ESM-experiment, calculate the ensemble average value of the interannual sd and the 2080-2099 average value for plotting
+
+
+# Sanity checking values
+
+values in a region for the multimodel mean (more than models looked at here) can be sanity checked with:
+
+https://interactive-atlas.ipcc.ch/regional-information
+
+Unfortunately only maps of the multimodel mean.
+
 
 # Global tas
 
-## r1 only
-Note for UKESM, a couple scenarios don't have r1, just r30-r40 and I was too tired to write yet another special case for UKESM so those get omitted 
+## ensemble average calculations
+```{r, message = FALSE}
+# get ecs ordering/labels
+esm_labels <- read.csv('global_tas_allesms.csv', stringsAsFactors = FALSE) %>%
+  select(esm) %>% distinct %>% 
+  mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
+         ECS_order = as.integer(row.names(.)))
 
-```{r, echo = FALSE}
-x <- read.csv('global_tas_allesms_r1only.csv', stringsAsFactors = F)
+# load time series
+x <- read.csv('global_tas_allesms_timeseries_2015_2100.csv', 
+              stringsAsFactors = F)
 
 
+process_time_series <- function(time_series_df, esm_label_info,
+                                hist_start = 1995, hist_end = 2014){
+  # Get ensemble member values for projection runs:
+  # 1. 2080-2099 average
+  # 2. loess detrend each ensemble member to get IAV
+  #
+  # split by run
+  non_hist <- time_series_df %>% filter(experiment != 'historical')
+  grouped <- split(non_hist, f = list(non_hist$esm, 
+                                      non_hist$experiment,
+                                      non_hist$ensemble, 
+                                      non_hist$variable ) )
+  # split creates group of every possible combo of the variables and fills in
+  # empty dataframes for the ones that don't exist in data. Drop those
+  grouped <- grouped[lapply(grouped, nrow)>0]
+  
+  processed_groups <- lapply(grouped, FUN = function(run_df){
+    loess_resids <- loess(run_df$ann_agg ~ run_df$year)$residuals
+    
+    run_df %>%
+      filter(year >= 2080, year <= 2099) %>%
+      group_by(esm, experiment, ensemble, variable) %>%
+      summarise(average_2080_2099 = mean(ann_agg)) %>% 
+      ungroup  %>%
+      mutate(iasd = sd((loess_resids))) ->
+      output_df
+    
+    return(output_df)
+    
+  })
+  
+  individual_stats <- do.call(bind_rows, processed_groups)
+  rm(non_hist)
+  rm(grouped)
+  rm(processed_groups)
+  
+  # calculate ensemble averages
+  individual_stats %>%
+    group_by(esm, experiment, variable) %>%
+    summarise(average_2080_2099 = mean(average_2080_2099),
+              iasd = mean(iasd)) %>%
+    ungroup ->
+    ensemble_stats
+  
+  
+  # get ensemble average historical average value:
+  time_series_df %>%
+    filter(experiment == 'historical',
+           year >= hist_start,
+           year <= hist_end) %>%
+    group_by(esm, experiment, ensemble, variable) %>%
+    summarise(historical_average = mean(ann_agg)) %>%
+    ungroup %>%
+    group_by(esm, experiment, variable) %>%
+    summarise(historical_average = mean(historical_average)) %>%
+    ungroup %>%
+    select(-experiment) ->
+    historical_ens
+  
+  
+  # shape and calculate changes for plotting:
+  ensemble_stats %>%
+    left_join(historical_ens, by = c('esm', 'variable')) %>%
+    left_join(esm_label_info, by = 'esm') %>%
+    mutate(change = average_2080_2099 - historical_average,
+           pct_change = 100*(average_2080_2099 - historical_average)/historical_average) ->
+    plot_tbl
+  
+return(plot_tbl)
+}
 
-x %>%
-    filter(experiment == 'historical') %>%
-    rename(historical_ens = ens_avg,
-           historical_sd = ens_avg_sd,
-           historical_iasd = ens_avg_iasd) %>%
-    select(-experiment) %>%
-    distinct %>%
-    mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
-           ECS_order = as.integer(row.names(.))) ->
-    historicaltas
+plot_tbl <- suppressMessages(process_time_series(time_series_df = x, esm_label_info = esm_labels))
 
-x %>%
-    filter(experiment != 'historical') %>%
-    left_join(historicaltas, by = c('esm', 'var')) %>%
-    mutate(ens_avg = if_else(ens_avg == -999, Inf, ens_avg),
-           ens_avg_sd = if_else(ens_avg_sd ==-999, Inf, ens_avg_sd),
-           ens_avg_iasd = if_else(ens_avg_iasd == -999, Inf, ens_avg_iasd)) %>%
-    mutate(pct_change = 100 * (ens_avg - historical_ens)/historical_ens,
-           change = ens_avg-historical_ens,
-           change_iasd = ens_avg_iasd - historical_iasd) ->
-    plot_tas
+global_tas <- x
+global_tas_summary <- plot_tbl
 ```
 
-### change
+## tas time series
+
+```{r, echo=FALSE, fig.height=13}
+
+# Check for complete years
+x %>%
+  filter(experiment!='historical') %>%
+  distinct %>%
+  group_by(esm, experiment, ensemble, variable) %>%
+  summarise(nyear = n()) %>%
+  ungroup %>%
+  filter(nyear >=85) ->
+  good_combos
+
+x %>% 
+  left_join(good_combos, by = c('esm', 'experiment', 'ensemble', 'variable')) %>%
+  na.omit -> 
+  x1
+
+ggplot(x %>% filter(experiment == 'historical')) + 
+  geom_line(mapping=aes(x=year, y=ann_agg, color = ensemble)) +
+  facet_wrap(~esm, nrow = 6) +
+  theme(legend.position = "none") +
+  ggtitle('Global annual tas, historical')
+
+ggplot(x1 %>% filter(experiment == 'ssp126')) + 
+  geom_line(mapping=aes(x=year, y=ann_agg, color = ensemble)) +
+  facet_wrap(~esm, nrow = 6) +
+  theme(legend.position = "none") +
+  ggtitle('Global annual tas, ssp126')
+  
+ggplot(x1 %>% filter(experiment == 'ssp245')) + 
+  geom_line(mapping=aes(x=year, y=ann_agg, color = ensemble)) +
+  facet_wrap(~esm, nrow = 6) +
+  theme(legend.position = "none") +
+  ggtitle('Global annual tas, ssp245')
+
+ggplot(x1 %>% filter(experiment == 'ssp370')) + 
+  geom_line(mapping=aes(x=year, y=ann_agg, color = ensemble)) +
+  facet_wrap(~esm, nrow = 6) +
+  theme(legend.position = "none") +
+  ggtitle('Global annual tas, ssp370')
+
+ggplot(x1 %>% filter(experiment == 'ssp585')) + 
+  geom_line(mapping=aes(x=year, y=ann_agg, color = ensemble)) +
+  facet_wrap(~esm, nrow = 6) +
+  theme(legend.position = "none") +
+  ggtitle('Global annual tas, ssp585')
+```
+
+## tas change time series
+
+```{r, echo=FALSE, fig.height=13}
+
+# Check for complete years
+x %>%
+  filter(experiment!='historical') %>%
+  distinct %>%
+  group_by(esm, experiment, ensemble, variable) %>%
+  summarise(nyear = n()) %>%
+  ungroup %>%
+  filter(nyear >=85) ->
+  good_combos
+
+x %>%
+  filter(experiment=='historical') %>%
+  distinct %>%
+  group_by(esm, experiment, ensemble, variable) %>%
+  summarise(hist_avg = mean(ann_agg)) %>%
+  ungroup %>%
+  select(-experiment) ->
+  hist_avg
+  
+
+x %>% 
+  left_join(good_combos, by = c('esm', 'experiment', 'ensemble', 'variable')) %>%
+  na.omit %>%
+  left_join(hist_avg, by = c('esm',  'ensemble', 'variable')) %>%
+  mutate(ann_agg = ann_agg-hist_avg) -> 
+  x1
+
+x %>%
+  filter(experiment=='historical') %>%
+  distinct %>%
+  left_join(hist_avg, by = c('esm',  'ensemble', 'variable')) %>% 
+  mutate(ann_agg = ann_agg-hist_avg) %>%
+  bind_rows(x1) ->
+  x1
+
+ggplot(x1 %>% filter(experiment == 'historical')) + 
+  geom_line(mapping=aes(x=year, y=ann_agg, color = ensemble)) +
+  facet_wrap(~esm, nrow = 6) +
+  theme(legend.position = "none") +
+  ggtitle('Global annual tas change from 1995-2014 avg, historical')
+
+ggplot(x1 %>% filter(experiment == 'ssp126')) + 
+  geom_line(mapping=aes(x=year, y=ann_agg, color = ensemble)) +
+  facet_wrap(~esm, nrow = 6) +
+  theme(legend.position = "none") +
+  ggtitle('Global annual tas change from 1995-2014 avg, ssp126')
+  
+ggplot(x1 %>% filter(experiment == 'ssp245')) + 
+  geom_line(mapping=aes(x=year, y=ann_agg, color = ensemble)) +
+  facet_wrap(~esm, nrow = 6) +
+  theme(legend.position = "none") +
+  ggtitle('Global annual tas change from 1995-2014 avg, ssp245')
+
+ggplot(x1 %>% filter(experiment == 'ssp370')) + 
+  geom_line(mapping=aes(x=year, y=ann_agg, color = ensemble)) +
+  facet_wrap(~esm, nrow = 6) +
+  theme(legend.position = "none") +
+  ggtitle('Global annual tas change from 1995-2014 avg, ssp370')
+
+ggplot(x1 %>% filter(experiment == 'ssp585')) + 
+  geom_line(mapping=aes(x=year, y=ann_agg, color = ensemble)) +
+  facet_wrap(~esm, nrow = 6) +
+  theme(legend.position = "none") +
+  ggtitle('Global annual tas change from 1995-2014 avg, ssp585')
+```
+
+
+## compare to stitches package data
+
+Pick a couple models to compare differences between my Tgav and stitches package Tgav calculations
+
+Models that have very different IASD plots to CT's
+
+### CAMS-CSM1-0_tas
+
+```{r}
+cams <- read.csv('/Users/snyd535/Documents/GitHub/stitches/stitches/data/tas-data/CAMS-CSM1-0_tas.csv', stringsAsFactors = FALSE) %>%
+  select(-zstore)
+
+x1 %>%
+  select(-nyear, -hist_avg) %>%
+  left_join(cams, by = c('esm'='model', 'variable', 'experiment', 'ensemble', 'year')) %>%
+  na.omit %>%
+  mutate(diff = ann_agg - value)  ->
+  cams2
+
+```
 
 ```{r, echo=FALSE}
 
-p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
-                           experiment != 'ssp460',
-                           experiment != 'ssp434',
-                           experiment != 'ssp534-over')) +
-    geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
-    #scale_fill_distiller(palette = 'BrBG', direction = -1) +
-    scale_fill_gradient(low = 'yellowgreen', high = 'firebrick3') +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    ggtitle(paste('Change in r1 2080-2099 average \nglobal', unique(plot_tas$var), 'from 1995-2014 global'))
+print('=====================================================')
+print('max difference between archive Tgav and stitches package Tgav for CAMS-CSM1-0_tas.csv:')
+print(max(abs(cams2$diff)))
+print('=====================================================')
 
-# ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_change.png'), p1, width = 6, height = 4, units='in')
+cams2 %>%
+  gather(quantity, val, -year, -esm, -experiment, -variable, -ensemble) ->
+  cams3
 
-p2 <- ggplot(plot_tas) +
-    geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
-    #scale_fill_distiller(palette = 'BrBG', direction = -1) +
-    scale_fill_gradient(low = 'yellowgreen', high = 'firebrick3') +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    ggtitle(paste('Change in r1 2080-2099 average \nglobal', unique(plot_tas$var), 'from 1995-2014 global'))
-
-# ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_change_overshoots.png'), p2, width = 6, height = 6, units='in')
-
-p1
-p2
-```
-
-### interannual sd
-```{r, echo=F}
-p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
-                           experiment != 'ssp460',
-                           experiment != 'ssp434',
-                           experiment != 'ssp534-over')) +
-    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
-    # scale_fill_gradientn(colors = rev(rainbow(3))) +
-    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
-                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
-    # scale_fill_gradientn(colours = c('blue', 'green', 'firebrick3'),
-    #                      values = scales::rescale(c(0.08, 0.14,0.2))) +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    ggtitle(paste('r1 2080-2099 interannual sd \nglobal', unique(plot_tas$var)))
-
-#ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_ia_sd.png'), p1, width = 6, height = 4, units='in')
-
-p2 <- ggplot(plot_tas) +
-    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
-    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
-                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    ggtitle(paste('r1 2080-2099 interannual sd \nglobal', unique(plot_tas$var)))
-
-#ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), 'ia_sd_overshoots.png'), p2, width = 6, height = 6, units='in')
-
-p1
-
-```
-
-### interannual sd 2015-2100
-```{r, echo = FALSE}
-x <- read.csv('global_tas_allesms_r1only.csv', stringsAsFactors = F)
-
-
-
-x %>%
-    filter(experiment == 'historical') %>%
-    rename(historical_ens = ens_avg,
-           historical_sd = ens_avg_sd,
-           historical_iasd = ens_avg_iasd) %>%
-    select(-experiment) %>%
-    distinct %>%
-    mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
-           ECS_order = as.integer(row.names(.))) ->
-    historicaltas
-
-x %>%
-    filter(experiment != 'historical') %>%
-    left_join(historicaltas, by = c('esm', 'var')) %>%
-    mutate(ens_avg = if_else(ens_avg == -999, Inf, ens_avg),
-           ens_avg_sd = if_else(ens_avg_sd ==-999, Inf, ens_avg_sd),
-           ens_avg_iasd = if_else(ens_avg_iasd == -999, Inf, ens_avg_iasd)) %>%
-    mutate(pct_change = 100 * (ens_avg - historical_ens)/historical_ens,
-           change = ens_avg-historical_ens,
-           change_iasd = ens_avg_iasd - historical_iasd) ->
-    plot_tas
-
-p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
-                           experiment != 'ssp460',
-                           experiment != 'ssp434',
-                           experiment != 'ssp534-over')) +
-    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
-    # scale_fill_gradientn(colors = rev(rainbow(3))) +
-    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
-                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
-    # scale_fill_gradientn(colours = c('blue', 'green', 'firebrick3'),
-    #                      values = scales::rescale(c(0.08, 0.14,0.2))) +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    ggtitle(paste('r1 2015-2099 interannual sd \nglobal', unique(plot_tas$var)))
-
-p1
+ggplot(cams3) +
+  geom_line(mapping = aes(x = year, y = val, color = ensemble)) +
+  facet_grid(experiment~quantity, scales= 'free') + 
+  theme(legend.position = "none") + 
+  ggtitle('CAMS-CSM1-0_tas calculated (ann_agg) and stitches package (value) \nTgav time series')
 ```
 
 
-## Ensemble average 
-```{r, echo = FALSE}
-x <- read.csv('global_tas_allesms.csv', stringsAsFactors = F)
 
+### UKESM1.0.LL
 
+```{r}
+ukesm <- read.csv('/Users/snyd535/Documents/GitHub/stitches/stitches/data/tas-data/UKESM1-0-LL_tas.csv', stringsAsFactors = FALSE) %>%
+  select(-zstore)
 
-x %>%
-    filter(experiment == 'historical') %>%
-    rename(historical_ens = ens_avg,
-           historical_sd = ens_avg_sd,
-           historical_iasd = ens_avg_iasd) %>%
-    select(-experiment) %>%
-    distinct %>%
-    mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
-           ECS_order = as.integer(row.names(.))) ->
-    historicaltas
-
-x %>%
-    filter(experiment != 'historical') %>%
-    left_join(historicaltas, by = c('esm', 'var')) %>%
-    mutate(ens_avg = if_else(ens_avg == -999, Inf, ens_avg),
-           ens_avg_sd = if_else(ens_avg_sd ==-999, Inf, ens_avg_sd),
-           ens_avg_iasd = if_else(ens_avg_iasd == -999, Inf, ens_avg_iasd)) %>%
-    mutate(pct_change = 100 * (ens_avg - historical_ens)/historical_ens,
-           change = ens_avg-historical_ens,
-           change_iasd = ens_avg_iasd - historical_iasd) ->
-    plot_tas
+x1 %>%
+  select(-nyear, -hist_avg) %>%
+  left_join(ukesm, by = c('esm'='model', 'variable', 'experiment', 'ensemble', 'year')) %>%
+  na.omit %>%
+  mutate(diff = ann_agg - value)  ->
+  ukesm2
 ```
 
-### tas change
+```{r, echo=FALSE}
+print('=====================================================')
+print('max difference between archive Tgav and stitches package Tgav for UKESM1-0-LL:')
+print(max(abs(ukesm2$diff)))
+print('=====================================================')
+
+ukesm2 %>%
+  gather(quantity, val, -year, -esm, -experiment, -variable, -ensemble) ->
+  ukesm3
+
+ggplot(ukesm3) +
+  geom_line(mapping = aes(x = year, y = val, color = ensemble)) +
+  facet_grid(experiment~quantity, scales= 'free') + 
+  theme(legend.position = "none") + 
+  ggtitle('UKESM1.0.LL calculated (ann_agg) and stitches package (value) \nTgav time series')
+```
+
+
+### CanESM5
+
+```{r}
+canesm <- read.csv('/Users/snyd535/Documents/GitHub/stitches/stitches/data/tas-data/CanESM5_tas.csv', stringsAsFactors = FALSE) %>%
+  select(-zstore)
+
+x1 %>%
+  select(-nyear, -hist_avg) %>%
+  left_join(canesm , by = c('esm'='model', 'variable', 'experiment', 'ensemble', 'year')) %>%
+  na.omit %>%
+  mutate(diff = ann_agg - value)  ->
+  canesm2
+```
+
+```{r, echo=FALSE}
+print('=====================================================')
+print('max difference between archive Tgav and stitches package Tgav for CanESM5:')
+print(max(abs(canesm2$diff)))
+print('=====================================================')
+
+canesm2 %>%
+  gather(quantity, val, -year, -esm, -experiment, -variable, -ensemble) ->
+  canesm3
+
+ggplot(canesm3) +
+  geom_line(mapping = aes(x = year, y = val, color = ensemble)) +
+  facet_grid(experiment~quantity, scales= 'free') + 
+  theme(legend.position = "none") + 
+  ggtitle('CanESM5 calculated (ann_agg) and stitches package (value) \nTgav time series')
+```
+
+
+### MIROC6
+
+```{r}
+miroc <- read.csv('/Users/snyd535/Documents/GitHub/stitches/stitches/data/tas-data/MIROC6_tas.csv', stringsAsFactors = FALSE) %>%
+  select(-zstore)
+
+x1 %>%
+  select(-nyear, -hist_avg) %>%
+  left_join(miroc , by = c('esm'='model', 'variable', 'experiment', 'ensemble', 'year')) %>%
+  na.omit %>%
+  mutate(diff = ann_agg - value)  ->
+  miroc2
+```
+
+```{r, echo=FALSE}
+print('=====================================================')
+print('max difference between archive Tgav and stitches package Tgav for MIROC6:')
+print(max(abs(miroc2$diff)))
+print('=====================================================')
+
+miroc2 %>%
+  gather(quantity, val, -year, -esm, -experiment, -variable, -ensemble) ->
+  miroc3
+
+ggplot(miroc3) +
+  geom_line(mapping = aes(x = year, y = val, color = ensemble)) +
+  facet_grid(experiment~quantity, scales= 'free') + 
+  theme(legend.position = "none") + 
+  ggtitle('Miroc6 calculated (ann_agg) and stitches package (value) \nTgav time series')
+```
+
+
+## tas change
 
 ```{r, echo=FALSE}
 
-p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
+p1 <- ggplot(plot_tbl %>% filter(experiment != 'ssp119',
                            experiment != 'ssp460',
                            experiment != 'ssp434',
                            experiment != 'ssp534-over')) +
     geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
     #scale_fill_distiller(palette = 'BrBG', direction = -1) +
-    scale_fill_gradient(low = 'yellowgreen', high = 'firebrick3') +
+    scale_fill_gradient(low = 'greenyellow', high = 'firebrick3') +
     theme_bw() +
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    ggtitle(paste('Change in ensemble average 2080-2099 average \nglobal', unique(plot_tas$var), 'from 1995-2014 global'))
+    ggtitle(paste('Change in ensemble average 2080-2099 average \nglobal', unique(plot_tbl$variable), 'from 1995-2014 global'))
 
-ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_change.png'), p1, width = 6, height = 4, units='in')
+ggsave(paste0('python_curation_figs/global_', unique(plot_tbl$variable), '_change.png'), p1, width = 6, height = 4, units='in')
 
-p2 <- ggplot(plot_tas) +
+p2 <- ggplot(plot_tbl) +
     geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
     #scale_fill_distiller(palette = 'BrBG', direction = -1) +
-    scale_fill_gradient(low = 'yellowgreen', high = 'firebrick3') +
+    scale_fill_gradient(low = 'greenyellow', high = 'firebrick3') +
     theme_bw() +
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    ggtitle(paste('Change in ensemble average 2080-2099 average \nglobal', unique(plot_tas$var), 'from 1995-2014 global'))
+    ggtitle(paste('Change in ensemble average 2080-2099 average \nglobal', unique(plot_tbl$variable), 'from 1995-2014 global'))
 
-ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_change_overshoots.png'), p2, width = 6, height = 6, units='in')
+ggsave(paste0('python_curation_figs/global_', unique(plot_tbl$variable), '_change_overshoots.png'), p2, width = 6, height = 6, units='in')
 
 p1
 p2
 ```
 
-### interannual sd
+## interannual sd
 ```{r, echo=F}
-p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
+p1 <- ggplot(plot_tbl %>% filter(experiment != 'ssp119',
                            experiment != 'ssp460',
                            experiment != 'ssp434',
                            experiment != 'ssp534-over')) +
-    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
-    # scale_fill_gradientn(colors = rev(rainbow(3))) +
-    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
-                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
-    # scale_fill_gradientn(colours = c('blue', 'green', 'firebrick3'),
-    #                      values = scales::rescale(c(0.08, 0.14,0.2))) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = iasd)) +
+    # scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
+    #                      values = scales::rescale(c(min(plot_tbl$iasd), 0.12, 0.14,0.155, 0.17, 0.19,max(plot_tbl$iasd)))) +
+   scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3') ) +
     theme_bw() +
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    ggtitle(paste('Ensemble average 2080-2099 interannual sd \nglobal', unique(plot_tas$var)))
+    ggtitle(paste('Ensemble average interannual sd \nglobal', unique(plot_tbl$variable)))
 
-ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_ia_sd.png'), p1, width = 6, height = 4, units='in')
+ggsave(paste0('python_curation_figs/global_', unique(plot_tbl$variable), '_iasd.png'), p1, width = 6, height = 4, units='in')
 
-p2 <- ggplot(plot_tas) +
-    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
-    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
-                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
+p2 <- ggplot(plot_tbl) +
+  geom_tile(aes(x = plotesm, y = experiment, fill = iasd)) +
+  scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
+                       values = scales::rescale(c(min(plot_tbl$iasd), 0.12, 0.14,0.155, 0.17, 0.19, max(plot_tbl$iasd)))) +
     theme_bw() +
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    ggtitle(paste('Ensemble average 2080-2099 interannual sd \nglobal', unique(plot_tas$var)))
+    ggtitle(paste('Ensemble average interannual sd \nglobal', unique(plot_tbl$variable)))
 
-ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), 'ia_sd_overshoots.png'), p2, width = 6, height = 6, units='in')
+ggsave(paste0('python_curation_figs/global_', unique(plot_tbl$variable), 'iasd_overshoots.png'), p2, width = 6, height = 6, units='in')
+
+p1
+p2
+```
+
+
+# CONUS tas change
+
+Exact same data prep 
+
+```{r, echo = FALSE, message = FALSE}
+
+conus_tas <- read.csv('CONUS_tas_allesms_timeseries_2015_2100.csv', 
+                                                          stringsAsFactors = F)
+
+plot_tbl <- suppressMessages(process_time_series(time_series_df = conus_tas, 
+                                                 esm_label_info = esm_labels))
+
+
+conus_tas_summary <- plot_tbl
+```
+
+
+```{r, echo=FALSE}
+
+p1 <- ggplot(plot_tbl %>% filter(experiment != 'ssp119',
+                           experiment != 'ssp460',
+                           experiment != 'ssp434',
+                           experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
+    #scale_fill_distiller(palette = 'BrBG', direction = -1) +
+    scale_fill_gradient(low = 'greenyellow', high = 'firebrick3') +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Change in ensemble average 2080-2099 average \nCONUS', unique(plot_tbl$variable), 'from 1995-2014 CONUS'))
+
+ggsave(paste0('python_curation_figs/CONUS_', unique(plot_tbl$variable), '_change.png'), p1, width = 6, height = 4, units='in')
+
+p2 <- ggplot(plot_tbl) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
+    #scale_fill_distiller(palette = 'BrBG', direction = -1) +
+    scale_fill_gradient(low = 'greenyellow', high = 'firebrick3') +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Change in ensemble average 2080-2099 average \nCONUS', unique(plot_tbl$variable), 'from 1995-2014 CONUS'))
+
+ggsave(paste0('python_curation_figs/CONUS_', unique(plot_tbl$variable), '_change_overshoots.png'), p2, width = 6, height = 6, units='in')
+
+p1
+p2
+```
+
+# CONUS interannual sd
+```{r, echo=F}
+p1 <- ggplot(plot_tbl %>% filter(experiment != 'ssp119',
+                           experiment != 'ssp460',
+                           experiment != 'ssp434',
+                           experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = iasd)) +
+    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3')) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Ensemble average interannual sd \nCONUS', unique(plot_tbl$variable)))
+
+ggsave(paste0('python_curation_figs/CONUS_', unique(plot_tbl$variable), '_iasd.png'), p1, width = 6, height = 4, units='in')
+
+p2 <- ggplot(plot_tbl) +
+  geom_tile(aes(x = plotesm, y = experiment, fill = iasd)) +
+  scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3')) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Ensemble average interannual sd \nCONUS', unique(plot_tbl$variable)))
+
+ggsave(paste0('python_curation_figs/CONUS_', unique(plot_tbl$variable), 'iasd_overshoots.png'), p2, width = 6, height = 6, units='in')
 
 p1
 p2
@@ -255,66 +534,532 @@ p2
 
 
 
-### interannual sd 2015 - 2100 
+
+# CONUS pr pct change
+```{r, echo = FALSE, message = FALSE}
+conus_pr <-  read.csv('CONUS_pr_allesms_timeseries_2015_2100.csv',
+                      stringsAsFactors = F)
+
+plot_pr <- suppressMessages(process_time_series(time_series_df =conus_pr, 
+                                                 esm_label_info = esm_labels))
+
+conus_pr_summary <- plot_pr
+```
+
+
+
+```{r, echo=FALSE}
+
+p3 <- ggplot(plot_pr %>% filter(experiment != 'ssp119',
+                                 experiment != 'ssp460',
+                                 experiment != 'ssp434',
+                                 experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = pct_change)) +
+  scale_fill_gradientn(colours = c('burlywood4', 'white', 'cadetblue4'),
+                         limits = c(-25, 25),
+                         oob=scales::squish) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Percent Change in ensemble average 2080-2099 average \nCONUS', unique(plot_pr$variable), 'from 1995-2014 CONUS'))
+
+ggsave(paste0('python_curation_figs/CONUS_', unique(plot_pr$variable), '_change.png'), p3, width = 6, height = 4, units='in')
+
+
+p4 <- ggplot(plot_pr) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = pct_change)) +
+    scale_fill_gradientn(colours = c('burlywood4', 'white', 'cadetblue4'),
+                         limits = c(-25, 25),
+                         oob=scales::squish) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Percent Change in ensemble average 2080-2099 average \nCONUS', unique(plot_pr$variable), 'from 1995-2014 CONUS'))
+
+ggsave(paste0('python_curation_figs/CONUS_', unique(plot_pr$variable), '_change_overshoots.png'), p4, width = 6, height = 6, units='in')
+
+p3
+p4
+
+```
+
+
+
+
+
+
+
+# Southwest tas change
+
+Arizona, New Mexico, Colorado, Utah
+
+```{r, echo = FALSE, message = FALSE}
+sw_tas <- read.csv('southwest_tas_allesms_timeseries_1850_2100.csv', 
+                   stringsAsFactors = F) %>%
+  filter(year >=1995)
+
+plot_tbl <- suppressMessages(process_time_series(time_series_df = sw_tas, 
+                                                 esm_label_info = esm_labels))
+
+sw_tas_summary <- plot_tbl
+```
+
+
+```{r, echo=FALSE}
+
+p1 <- ggplot(plot_tbl %>% filter(experiment != 'ssp119',
+                           experiment != 'ssp460',
+                           experiment != 'ssp434',
+                           experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
+    #scale_fill_distiller(palette = 'BrBG', direction = -1) +
+    scale_fill_gradient(low = 'greenyellow', high = 'firebrick3') +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Change in ensemble average 2080-2099 average \nsouthwest', unique(plot_tbl$variable), 'from 1995-2014 southwest'))
+
+ggsave(paste0('python_curation_figs/southwest_', unique(plot_tbl$variable), '_change.png'), p1, width = 6, height = 4, units='in')
+
+p2 <- ggplot(plot_tbl) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = change)) +
+    #scale_fill_distiller(palette = 'BrBG', direction = -1) +
+    scale_fill_gradient(low = 'greenyellow', high = 'firebrick3') +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Change in ensemble average 2080-2099 average \nsouthwest', unique(plot_tbl$variable), 'from 1995-2014 southwest'))
+
+ggsave(paste0('python_curation_figs/southwest_', unique(plot_tbl$variable), '_change_overshoots.png'), p2, width = 6, height = 6, units='in')
+
+p1
+p2
+```
+
+## interannual sd
+```{r, echo=F}
+p1 <- ggplot(plot_tbl %>% filter(experiment != 'ssp119',
+                           experiment != 'ssp460',
+                           experiment != 'ssp434',
+                           experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = iasd)) +
+    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3')) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Ensemble average interannual sd \nsouthwest', unique(plot_tbl$variable)))
+
+ggsave(paste0('python_curation_figs/southwest_', unique(plot_tbl$variable), '_iasd.png'), p1, width = 6, height = 4, units='in')
+
+p2 <- ggplot(plot_tbl) +
+  geom_tile(aes(x = plotesm, y = experiment, fill = iasd)) +
+  scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3')) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Ensemble average interannual sd \nsouthwest', unique(plot_tbl$variable)))
+
+ggsave(paste0('python_curation_figs/southwest_', unique(plot_tbl$variable), 'iasd_overshoots.png'), p2, width = 6, height = 6, units='in')
+
+p1
+p2
+```
+
+
+
+
+# Southwest pr pct change
+```{r, echo = FALSE, message = FALSE}
+sw_pr <- read.csv('southwest_pr_allesms_timeseries_1850_2100.csv', 
+                  stringsAsFactors = F) %>%
+  filter(year >=1995)
+
+plot_pr <- suppressMessages(process_time_series(time_series_df = sw_pr, 
+                                                esm_label_info = esm_labels,
+                                                hist_start = 1995, hist_end = 2014))
+
+sw_pr_summary <- plot_pr
+```
+
+
+```{r, echo=FALSE}
+
+p3 <- ggplot(plot_pr %>% filter(experiment != 'ssp119',
+                                 experiment != 'ssp460',
+                                 experiment != 'ssp434',
+                                 experiment != 'ssp534-over')) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = pct_change)) +
+    scale_fill_gradientn(colours = c('burlywood4', 'white', 'cadetblue4'),
+                         limits = c(-25, 25),
+                         oob=scales::squish) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Percent Change in ensemble average 2080-2099 average \nsouthwest', unique(plot_pr$variable), 'from 1995-2014 southwest'))
+
+ggsave(paste0('python_curation_figs/southwest_', unique(plot_pr$variable), '_change.png'), p3, width = 6, height = 4, units='in')
+
+
+p4 <- ggplot(plot_pr) +
+    geom_tile(aes(x = plotesm, y = experiment, fill = pct_change)) +
+    scale_fill_gradientn(colours = c('burlywood4', 'white', 'cadetblue4'),
+                         limits = c(-25, 25),
+                         oob=scales::squish) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    ggtitle(paste('Percent Change in ensemble average 2080-2099 average \nsouthwest', unique(plot_pr$variable), 'from 1995-2014 southwest'))
+
+ggsave(paste0('python_curation_figs/southwest_', unique(plot_pr$variable), '_change_overshoots.png'), p4, width = 6, height = 6, units='in')
+
+p3
+p4
+
+```
+
+
+# exploration of relationships
+
+## scatter plots CONUS, global
 
 ```{r, echo = FALSE}
-x <- read.csv('global_tas_allesms_2015_2100.csv', stringsAsFactors = F)
 
+bind_rows(global_tas_summary %>% mutate(region = 'global') ,
+          conus_tas_summary %>% mutate(region = 'conus') ,
+          conus_pr_summary %>% mutate(region = 'conus'),
+          sw_tas_summary %>% mutate(region = 'sw') ,
+          sw_pr_summary %>% mutate(region = 'sw')) ->
+  comparison_long
 
+bind_rows(global_tas_summary %>%
+            rename(global_historical_average = historical_average,
+                   global_average_2080_2099 = average_2080_2099,
+                   global_iasd = iasd,
+                   global_change = change, 
+                   global_pct_change = pct_change,
+                   global_variable = variable) %>% 
+            left_join(conus_tas_summary %>%
+                        rename(conus_historical_average = historical_average,
+                               conus_average_2080_2099 = average_2080_2099,
+                               conus_iasd = iasd,
+                               conus_change = change, 
+                               conus_pct_change = pct_change,
+                               region_variable = variable), 
+                      by= c('esm', 'experiment', 'plotesm', 'ECS_order')) ,
+          global_tas_summary %>%
+            rename(global_historical_average = historical_average,
+                   global_average_2080_2099 = average_2080_2099,
+                   global_iasd = iasd,
+                   global_change = change, 
+                   global_pct_change = pct_change,
+                   global_variable = variable) %>% 
+            left_join(conus_pr_summary %>%
+                        rename(conus_historical_average = historical_average,
+                               conus_average_2080_2099 = average_2080_2099,
+                               conus_iasd = iasd,
+                               conus_change = change, 
+                               conus_pct_change = pct_change,
+                               region_variable = variable), 
+                      by= c('esm', 'experiment', 'plotesm', 'ECS_order')) 
+          ) ->
+  comparison_wide
 
-x %>%
-    filter(experiment == 'historical') %>%
-    rename(historical_ens = ens_avg,
-           historical_sd = ens_avg_sd,
-           historical_iasd = ens_avg_iasd) %>%
-    select(-experiment) %>%
-    distinct %>%
-    mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
-           ECS_order = as.integer(row.names(.))) ->
-    historicaltas
-
-x %>%
-    filter(experiment != 'historical') %>%
-    left_join(historicaltas, by = c('esm', 'var')) %>%
-    mutate(ens_avg = if_else(ens_avg == -999, Inf, ens_avg),
-           ens_avg_sd = if_else(ens_avg_sd ==-999, Inf, ens_avg_sd),
-           ens_avg_iasd = if_else(ens_avg_iasd == -999, Inf, ens_avg_iasd)) %>%
-    mutate(pct_change = 100 * (ens_avg - historical_ens)/historical_ens,
-           change = ens_avg-historical_ens,
-           change_iasd = ens_avg_iasd - historical_iasd) ->
-    plot_tas
 ```
 
-```{r, echo=F}
-p1 <- ggplot(plot_tas %>% filter(experiment != 'ssp119',
-                           experiment != 'ssp460',
-                           experiment != 'ssp434',
-                           experiment != 'ssp534-over')) +
-    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
-    # scale_fill_gradientn(colors = rev(rainbow(3))) +
-    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
-                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
-    # scale_fill_gradientn(colours = c('blue', 'green', 'firebrick3'),
-    #                      values = scales::rescale(c(0.08, 0.14,0.2))) +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    ggtitle(paste('Ensemble average 2015-2099 interannual sd \nglobal', unique(plot_tas$var)))
+```{r, echo=FALSE}
+p00 <- ggplot(comparison_wide %>% filter(global_variable == 'tas',
+                                       experiment != 'ssp119',
+                                       experiment != 'ssp460',          
+                                       experiment != 'ssp434',
+                                       experiment != 'ssp534-over')) +
+  geom_point(mapping = aes(x = global_change, y = global_iasd, color = plotesm, shape = experiment)) + 
+  geom_line(mapping = aes(x = global_change, y = global_iasd, color = plotesm))+
+  #facet_wrap(~experiment, nrow = 2) +
+  ggtitle('Global change in temperature vs Global interannual sd')
+p00
+```
 
-ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), '_ia_sd_2015-2100.png'), p1, width = 6, height = 4, units='in')
+```{r, echo=FALSE}
+p0 <- ggplot(comparison_wide %>% filter(region_variable == 'tas',
+                                       experiment != 'ssp119',
+                                       experiment != 'ssp460',          
+                                       experiment != 'ssp434',
+                                       experiment != 'ssp534-over')) +
+  geom_point(mapping = aes(x = conus_change, y = conus_iasd, color = plotesm, shape = experiment)) +
+  geom_line(mapping = aes(x = conus_change, y = conus_iasd, color = plotesm)) +
+  #facet_wrap(~experiment, nrow = 2) +
+  ggtitle('CONUS change in temperature vs CONUS interannual sd')
+p0
 
-p2 <- ggplot(plot_tas) +
-    geom_tile(aes(x = plotesm, y = experiment, fill = ens_avg_iasd)) +
-    scale_fill_gradientn(colours = c('darkblue','blue', 'cyan', 'green', 'yellow', 'red', 'firebrick3'),
-                         values = scales::rescale(c(min(plot_tas$ens_avg_iasd), 0.12, 0.14,0.151, 0.162, 0.19, max(plot_tas[!is.infinite(plot_tas$ens_avg_iasd),]$ens_avg_iasd)))) +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    ggtitle(paste('Ensemble average 2015-2099 interannual sd \nglobal', unique(plot_tas$var)))
-
-ggsave(paste0('python_curation_figs/global_', unique(plot_tas$var), 'ia_sd_overshoots_2015_2100.png'), p2, width = 6, height = 6, units='in')
-
+p1 <- ggplot(comparison_wide %>% filter(region_variable == 'tas',
+                                       experiment != 'ssp119',
+                                       experiment != 'ssp460',          
+                                       experiment != 'ssp434',
+                                       experiment != 'ssp534-over')) +
+  geom_point(mapping = aes(x = global_change, y = conus_change, color = plotesm, shape = experiment)) +
+  geom_line(mapping = aes(x = global_change, y = conus_change, color = plotesm)) +
+  #facet_wrap(~experiment, nrow = 2) +
+  ggtitle('Global change in temperature vs CONUS change in temperature')
 p1
+
+p2 <- ggplot(comparison_wide %>% filter(region_variable == 'tas',
+                                       experiment != 'ssp119',
+                                       experiment != 'ssp460',          
+                                       experiment != 'ssp434',
+                                       experiment != 'ssp534-over')) +
+  geom_point(mapping = aes(x = global_change, y = conus_iasd, color = plotesm, shape = experiment)) +
+  geom_line(mapping = aes(x = global_change, y = conus_iasd, color = plotesm)) +
+  # facet_wrap(~experiment, nrow = 2) +
+  ggtitle('Global change in temperature vs CONUS interannual sd')
+p2
+
+p3 <- ggplot(comparison_wide %>% filter(region_variable == 'tas',
+                                       experiment != 'ssp119',
+                                       experiment != 'ssp460',          
+                                       experiment != 'ssp434',
+                                       experiment != 'ssp534-over')) +
+  geom_point(mapping = aes(x = global_iasd, y = conus_iasd, color = plotesm, shape = experiment)) +
+  geom_line(mapping = aes(x = global_iasd, y = conus_iasd, color = plotesm)) +
+  # facet_wrap(~experiment, nrow = 2) +
+  ggtitle('Global interannual sd vs CONUS interannual sd')
+p3
+  
+```
+```{r, echo=FALSE}
+p1 <- ggplot(comparison_wide %>% filter(region_variable == 'pr',
+                                       experiment != 'ssp119',
+                                       experiment != 'ssp460',          
+                                       experiment != 'ssp434',
+                                       experiment != 'ssp534-over')) +
+  geom_point(mapping = aes(x = global_change, y = conus_pct_change, color = plotesm, shape = experiment)) +
+  geom_line(mapping = aes(x = global_change, y = conus_pct_change, color = plotesm)) +
+  # facet_wrap(~experiment, nrow = 2)+
+  ggtitle('Global change in temperature vs CONUS percent change in precip')
+p1
+
+comparison_long %>%
+  filter(region == 'conus',
+         variable == 'tas') %>%
+  select(esm, plotesm, experiment, region, change) %>%
+  rename(tas_change = change) %>%
+  left_join(comparison_long %>%
+              filter(region == 'conus',
+                     variable == 'pr') %>%
+              select(esm, plotesm, experiment, region, pct_change) %>%
+              rename(pr_pct_change = pct_change),
+            by = c('esm', 'plotesm', 'experiment', 'region')) ->
+  plot_tbl
+
+p2 <- ggplot(plot_tbl %>% filter(experiment != 'ssp119',
+                                 experiment != 'ssp460',    
+                                 experiment != 'ssp434',
+                                 experiment != 'ssp534-over')) +
+  geom_point(mapping = aes(x = tas_change, y = pr_pct_change, color = plotesm, shape = experiment)) +
+  geom_line(mapping = aes(x = tas_change, y = pr_pct_change, color = plotesm)) +
+  #facet_wrap(~experiment, nrow = 2) +
+  ggtitle('CONUS change in temperature vs CONUS percent change in precip')
 p2
 ```
 
 
-# CONUS
+## 3d scatters
+
+```{r, echo=FALSE}
+library(scatterplot3d)
+colors <- data.frame(colors = rainbow(12), ECS_order = 1:12)
+shapes <- data.frame(shapes = c(16, 17, 18, 19), experiment = c('ssp126', 'ssp245', 'ssp370', 'ssp585'))
+
+comparison_long %>%
+  filter(experiment != 'ssp119',
+         experiment != 'ssp460',    
+         experiment != 'ssp434',
+         experiment != 'ssp534-over') %>%
+  select(-average_2080_2099, -historical_average) %>%
+  filter(variable == 'pr')  %>%
+  rename(pr_pct_change = pct_change) %>%
+  select(-change, -iasd, -variable)->
+  tmp
+
+comparison_long %>%
+    filter(experiment != 'ssp119',
+         experiment != 'ssp460',    
+         experiment != 'ssp434',
+         experiment != 'ssp534-over') %>%
+  select(-average_2080_2099, -historical_average) %>%
+  filter(variable == 'tas')  %>%
+  rename(tas_change = change,
+         tas_iasd = iasd) %>%
+  select(-pct_change, -variable)%>%
+  left_join(tmp, by = c('esm', 'experiment', 'region', 'ECS_order', 'plotesm')) %>%
+  left_join(colors, by = 'ECS_order') %>%
+  left_join(shapes, by = 'experiment') ->
+   comparison3d
+rm(tmp)
+```
+### global
+```{r, warning=FALSE, echo = FALSE, message=FALSE}
+library(plotly)
+comparison3d %>% filter(region == 'global') ->
+  global
+# scatterplot3d::scatterplot3d(global[, c('tas_change', 'tas_iasd', 'ECS_order')],
+#                              pch = global$shapes, color=global$colors)
+# legend('right', legend = esm_labels$esm, col = rainbow(12), pch = 16,
+#        inset = -0.25, xpd=TRUE)
+
+fig <- plot_ly(global, x = ~tas_change, y = ~tas_iasd, z = ~ECS_order, color = ~plotesm,
+               colors = rainbow(12))
+fig
+```
+
+
+### conus
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+comparison3d %>% filter(region == 'conus') ->
+  conus
+# scatterplot3d::scatterplot3d(conus[, c('tas_change', 'tas_iasd', 'pr_pct_change')],
+#                              pch = conus$shapes, color=conus$colors)
+# 
+# legend('right', legend = esm_labels$esm, col = rainbow(12), pch = 16,
+#        inset = -0.25, xpd=TRUE)
+
+fig <- plot_ly(conus, x = ~tas_change, y = ~tas_iasd, z = ~pr_pct_change, color = ~plotesm,
+               colors = rainbow(12))
+fig
+```
+
+### southwest
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+comparison3d %>% filter(region == 'sw') ->
+  sw
+fig <- plot_ly(sw, x = ~tas_change, y = ~tas_iasd, z = ~pr_pct_change, color = ~plotesm,
+               colors = rainbow(12))
+fig
+
+```
+
+
+## rank order
+
+```{r, echo=FALSE}
+comparison_long  %>%
+  select(-average_2080_2099, -historical_average) %>%
+  group_by(experiment, variable, region) %>%
+  mutate(rank_change=rank(change),
+         rank_iasd = rank(iasd),
+         rank_pct = rank(pct_change)) %>%
+  ungroup %>% 
+  select(-iasd, -change, -pct_change) %>%
+  distinct ->
+  rank_summary
+
+rank_summary %>%
+  gather(metric, rank, -esm, -experiment, -variable, -plotesm, -ECS_order, -region) %>% 
+  mutate(metric = substr(metric, 6, nchar(metric)),
+         metric = paste0(region, '~', variable, '~', metric)) %>%
+  select(-region, -variable) %>%
+  spread(metric, rank) ->
+  rank_wide
+
+```
+
+
+```{r, echo =FALSE}
+p1 <- ggplot(rank_summary%>% filter(experiment != 'ssp119',
+                                 experiment != 'ssp460',    
+                                 experiment != 'ssp434',
+                                 experiment != 'ssp534-over',
+                              variable == 'tas')) +
+  geom_point(mapping = aes(x = plotesm, y = rank_change, color = rank_change)) +
+  facet_grid(experiment~region) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))  +
+  ggtitle('Rank of tas change by ESM')
+p1
+
+p2 <- ggplot(rank_summary%>% filter(experiment != 'ssp119',
+                                 experiment != 'ssp460',    
+                                 experiment != 'ssp434',
+                                 experiment != 'ssp534-over',
+                              variable == 'tas')) +
+  geom_point(mapping = aes(x = plotesm, y = rank_iasd, color =rank_iasd)) +
+  facet_grid(experiment~region) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))  +
+  ggtitle('Rank of tas interannual sd by ESM')
+p2
+
+
+p3 <- ggplot(rank_summary%>% filter(experiment != 'ssp119',
+                                 experiment != 'ssp460',    
+                                 experiment != 'ssp434',
+                                 experiment != 'ssp534-over',
+                              variable == 'pr')) +
+  geom_point(mapping = aes(x = plotesm, y = rank_pct, color =rank_pct)) +
+  facet_grid(experiment~region) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))  +
+  ggtitle('Rank of pr pct change by ESM')
+p3
+```
+
+
+# notes
+
+Assorted 2d and 3d scatters show sampling is 
+
+1. worth doing across 12 ESMs because the deltaT dimension alone hides things
+
+2. not leaving major holes across our identified space of deltaT, iasd of T, deltaP at different spatial scales
+
+
+## ToDos for archive and paper:
+
+- global P didn't make sense to look at to me but I could do land mask T and P maybe instead of the global calculation?
+
+- could use Noah checking my work on masking since still getting different ensemble average iasd values?
+
+- For the paper, envisioning some of these scatters to show it's worth looking at all 12 and not fewer ESMs, and then doing the parameter estimation for stitches functions. And the curated data set is then a zenodo archive of the generated ensemble members + script to pull true runs
+
+- is it worth characterizing across more dimensions of uncertainty? Other variables or maybe some kind of spatial range metric in addition to AOI? I started thinking about some HC analysis on the 3dimensions we've identified but I'm not sure it's worth it? https://uc-r.github.io/hc_clustering#replication 
+
+
+Otherwise in general, I'm aiming to spend next week really harassing CRV about joss paper so we can get it in
+
+then focus on the parameter estimation for stitches for these 12 ESMs, generating a bunch of runs and writing up the paper using some of the above figures? Some small stitches improvements to go along with that, mostly so that the ESMs on our list with grids labeled other than `gn` are included in the package data. 
+
+## Notes for demonstration paper:
+
+Then as we start thinking about demonstration, are we thinking that will be a feed forward experiment or are we going to try to do feedbacks?
+
+- feedbacks, we'll have to do some clean up so that the matching happens time step by time step but we still control for collapse and make sure the final time series constructed this way still behaves. Should be ok but mechanical code changes to be sure.
+
+- or are we thinking to take some standard GCAM runs, take the Hector Tgav from those, and look at different spatial outcomes on these novel pathways? Same Hector Tgav but there's X many spatially different worlds that are consistent with that Tgav and is there something interesting and in scope that we could say about those spatially different worlds without necessarily having to do feedbacks? and maybe even without having to then run those through impacts models even...
+
+## Notes for overshoots:
+
+- ultimately will come down to memory? the overshoots rely kind of heavily on land carbon sinks to get to the targets so I could see memory being more important for our usual variables than in the monotonic scenarios 
+
+- in general, we're trying to think if we can time reverse the monotonic scenarios and use those for overshoots. doing reflection across the xaxis of our 2d matching space. a good amount of code changes and it will be clunky to do it but we can. Guess the question is if we think there's any chance of it working before we embark on the code changes
+
+- what would we do with the months even if we did convince ourselves it would work? We have a target point from an overshoot and we find a match for it in the (T, -X*dT) archive space
+
+- so 2080-2089 target gets matched to 2059-2050 window. Then is it Jan 2080 = Jan 2059, Jan 2081= Jan 2058 and so on (reverse years but keep months in order in each year) or do we have to reverse the entire thing? That would be Jan 2080 = Dec 2059, Feb 2080 = Nov 2059 and seasonality would be all messed up. So we have to keep months in order so that a January gets matched to a January and so on. Then we're mixing forward time flow (each year) with backwards (across years) and there's almost no way that results in sensible time series? (or time series mathematically indistinguishable from sensible?)
+
+- Or IS (January to February to March) indistinguishable from (December to November to October) - from a land carbon stocks perspective, I don't see how it can be but maybe that's too in the weeds. Maybe that's the first investigation - if I do forward month-to-month differences and compare to backward ones, how different do they end up? For sure we wouldn't be able to extend to daily data but maybe seasonal signals from a monthly perspective are symmetric enough. Pay special attention to grid cells with monsoon seasons? Could arguably restrict investigation to like. Just points in (T, X*dT) space with T<=2.5C. Start with one ESM, figure out tests and code, extend
+
+- from there, check if it breaks ENSO?  If those all look reasonable, code changes to actually stitch on reversed time may be worth doing 
+
+- do also have points, especially in historical period, where dT is negative already. Could do a controlled test and compare two nine year chunks from a single ESM that are at the same T and similar magnitude dT. Start the above comparisons focusing on those windows, then extend to projections. 126 and 245 will have natural points with negative dTs we can repeat the test on. 
+
+- And we know stitches should work on the monotonic (first) part of an overshoot time series, it's just once the draw down kicks in that we have to get creative and validate.
+
+
+
+
+Emulators work by relying on local variables being slaved to global temp in at least some way even if we can't write equations to describe the way. That's why stitches is cool, it doesn't make assumptions about the way. 
+
+
+Suppose the way that relationship works in the monotonic scenarios is fundamentally different than the relationship in overshoot scenarios. But stitches is 'learning' the monotonic assumption, even if we reverse dT, no?  It's assuming the local-global mapping in the overshoot scenarios is not fundamentally, structurally different from that, that flipping time is enough.
+
+So if our generated time series doing this are trash (or if our comparison of naturally postive and negative dT windows of actual ESM data fails), then what is that telling us? Is there anything we can learn from that difference that's useful? I have very vague memories of talking to BK about using that to estimate hysteresis when he and I were brainstorming papers at some point
+
+- is that somewhere mean fields can help us hammer out where the failure is coming from, if it fails? linear patterns ARE perfectly time reversible.  
+
+- Is that a useful test? take an SSP126 pattern, run an SSP119 tgav through it. Focus on the negative dT years and compare the pattern generated maps to the ensemble average/smoothed maps? Would want to start with an ESM that not only ran SSP119 but maybe even ran it for more than one ensemble member.
+
+
+- Then the final practical consideration is how do we frame it into a GCIMS paper
+
