@@ -17,6 +17,7 @@ library(ggplot2)
 library(dplyr)
 library(tidyr)
 
+timeseries_dir <- 'extracted_timeseries/'
 ```
 # Notes on work flow
 
@@ -52,13 +53,13 @@ Unfortunately only maps of the multimodel mean.
 ## ensemble average calculations
 ```{r, message = FALSE}
 # get ecs ordering/labels
-esm_labels <- read.csv('global_tas_allesms.csv', stringsAsFactors = FALSE) %>%
+esm_labels <- read.csv(paste0(timeseries_dir,'global_tas_allesms.csv'), stringsAsFactors = FALSE) %>%
   select(esm) %>% distinct %>% 
   mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
          ECS_order = as.integer(row.names(.)))
 
 # load time series
-x <- read.csv('global_tas_allesms_timeseries_2015_2100.csv', 
+x <- read.csv(paste0(timeseries_dir,'global_tas_allesms_timeseries_2015_2100.csv'), 
               stringsAsFactors = F)
 
 
@@ -465,7 +466,7 @@ Exact same data prep
 
 ```{r, echo = FALSE, message = FALSE}
 
-conus_tas <- read.csv('CONUS_tas_allesms_timeseries_2015_2100.csv', 
+conus_tas <- read.csv(paste0(timeseries_dir,'CONUS_tas_allesms_timeseries_2015_2100.csv'), 
                                                           stringsAsFactors = F)
 
 plot_tbl <- suppressMessages(process_time_series(time_series_df = conus_tas, 
@@ -537,7 +538,7 @@ p2
 
 # CONUS pr pct change
 ```{r, echo = FALSE, message = FALSE}
-conus_pr <-  read.csv('CONUS_pr_allesms_timeseries_2015_2100.csv',
+conus_pr <-  read.csv(paste0(timeseries_dir,'CONUS_pr_allesms_timeseries_2015_2100.csv'),
                       stringsAsFactors = F)
 
 plot_pr <- suppressMessages(process_time_series(time_series_df =conus_pr, 
@@ -592,7 +593,7 @@ p4
 Arizona, New Mexico, Colorado, Utah
 
 ```{r, echo = FALSE, message = FALSE}
-sw_tas <- read.csv('southwest_tas_allesms_timeseries_1850_2100.csv', 
+sw_tas <- read.csv(paste0(timeseries_dir,'southwest_tas_allesms_timeseries_1850_2100.csv'), 
                    stringsAsFactors = F) %>%
   filter(year >=1995)
 
@@ -664,7 +665,7 @@ p2
 
 # Southwest pr pct change
 ```{r, echo = FALSE, message = FALSE}
-sw_pr <- read.csv('southwest_pr_allesms_timeseries_1850_2100.csv', 
+sw_pr <- read.csv(paste0(timeseries_dir,'southwest_pr_allesms_timeseries_1850_2100.csv'), 
                   stringsAsFactors = F) %>%
   filter(year >=1995)
 
