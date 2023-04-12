@@ -1,0 +1,626 @@
+---
+title: "som practice"
+author: "ACS"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#TODO harmonize color bars? at least for precip so it has brown for decreases
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(kohonen)
+library(vegan)  # for vegdist function which gives a dissimilarity index
+```
+
+
+# RGB example
+https://www.polarmicrobes.org/tutorial-self-organizing-maps-in-r/
+
+"This application of SOMs has two steps.  Each of these steps can be thought of as an independent data reduction step.  It’s important to remember that you’re not reducing dimensions per se, as you would in a PCA, you’re aggregating like data so that you can describe them as convenient units (instead of n individual observations).  The final outcome, however, represents a reduction in dimensionality to a single parameter for all observations (e.g., the color blue instead of (0, 0, 255) in RGB colorspace).  The first step – training the SOM – assigns your observations to map units.  The second step – clustering the map units into classes – finds the structure underlying the values associated with the map units after training.  At the end of this procedure each observation belongs to a map unit, and each map unit belongs to a class.  Thus each observation inherits the class of its associated map unit.  If that’s not clear don’t sweat it.  It will become clear as you go through the procedure."
+
+## generate data
+"First, let’s generate some random RGB data.  This takes the form of a three column matrix where each row is a pixel (i.e. an observation)."
+
+
+```{r}
+#### generate some RGB data ####
+
+## select the number of random RGB vectors for training data
+
+sample.size <- 10000
+
+## generate dataframe of random RGB vectors
+
+sample.rgb <- as.data.frame(matrix(nrow = sample.size, ncol = 3))
+colnames(sample.rgb) <- c('R', 'G', 'B')
+
+sample.rgb$R <- sample(0:255, sample.size, replace = T)
+sample.rgb$G <- sample(0:255, sample.size, replace = T)
+sample.rgb$B <- sample(0:255, sample.size, replace = T)
+
+print(head(sample.rgb))
+```
+
+## Define grid for SOM and train
+"Next, we define a map space for the SOM and train the model. Picking the right grid size for the map space is non-trivial; you want about 5 elements from the training data per map unit, though you’ll likely find that they’re not uniformly distributed.  It’s best to use a symmetrical map unless you have a very small training dataset, hexagonal map units, and a toroidal shape.  The latter is important to avoid edge effects (a toroid has no edges).
+
+One important caveat for the RGB data is that we’re not going to bother with any scaling or normalizing.  The parameters are all on the same scale and evenly distributed between 0 and the max value of 255.  Likely your data are not so nicely formed! "
+
+```{r}
+#### train the SOM ####
+
+## define a grid for the SOM and train
+
+grid.size <- ceiling(sample.size ^ (1/2.5))
+som.grid <- somgrid(xdim = grid.size, ydim = grid.size, topo = 'hexagonal', toroidal = T)
+som.model <- som(data.matrix(sample.rgb), grid = som.grid)
+
+```
+Take a look a the structure of an `som()` output.
+
+"The output takes the form of nested lists.  Here we extract a couple of items that we’ll need later, and also create a distance matrix of the map units.  We can do this because the fundamental purpose of map units is to have a codebook vector that mimics the structure of the training data.  During training each codebook vector is iteratively updated along with its neighbors to match the training data.  After sufficient iterations the codebook vectors reflect the underlying structure of the data."
+
+```{r}
+print(str(som.model))
+
+## extract some data to make it easier to use
+
+som.events <- som.model$codes[[1]]
+print(head(som.events))
+
+som.events.colors <- rgb(som.events[,1], som.events[,2], som.events[,3], maxColorValue = 255)
+print(head(som.events.colors))
+
+# create a distance matrix of the map units. 
+som.dist <- as.matrix(dist(som.events))
+print(som.dist[1:5, 1:4])
+```
+
+## plot
+
+"Now that we have a trained SOM let’s generate a descriptive plot.  Since the data are RGB colors, if we color the plot accordingly it should be sensible.  For comparison, we first create a plot with randomized codebook vectors.  This represents the SOM at the start of training." 
+
+```{r}
+
+## generate a plot of the untrained data.  this isn't really the configuration at first iteration, but
+## serves as an example
+
+plot(som.model,
+     type = 'mapping',
+     bg = som.events.colors[sample.int(length(som.events.colors), size = length(som.events.colors))],
+     keepMargins = F,
+     col = NA,
+     main = '')
+```
+
+The trained SOM:
+```{r}
+plot(som.model,
+     type = 'mapping',
+     bg = som.events.colors,
+     keepMargins = F,
+     col = NA,
+     main = '')
+```
+## Pick cluster size
+"The next step is to cluster the map units into classes.  As with all clustering analysis, a key question is how many clusters (k) should we define?  One way to inform our decision is to evaluate the distance between all items assigned to each cluster for many different values of k.  Ideally, creating a scree plot of mean within-cluster distance vs. k will yield an inflection point that suggests a meaningful value of k.  In practice this inflection point is extremely sensitive to the size of the underlying data (in this case, the number of map units), however, it can be a useful starting place.  Consider that the RGB data were defined continuously, meaning that there is no underlying structure!  Nonetheless we still get an inflection point."
+
+```{r}
+#### look for a reasonable number of clusters ####
+
+## Evaluate within cluster distances for different values of k.  This is
+## more dependent on the number of map units in the SOM than the structure
+## of the underlying data, but until we have a better way...
+
+## Define a function to calculate mean distance within each cluster.  This
+## is roughly analogous to the within clusters ss approach
+
+clusterMeanDist <- function(clusters){
+  cluster.means = c()
+  
+  for(c in unique(clusters)){
+    temp.members <- which(clusters == c)
+    
+    if(length(temp.members) > 1){
+      temp.dist <- som.dist[temp.members,]
+      temp.dist <- temp.dist[,temp.members]
+      cluster.means <- append(cluster.means, mean(temp.dist))
+    }else(cluster.means <- 0)
+  }
+  
+  return(mean(cluster.means))
+  
+}
+
+try.k <- 2:100
+cluster.dist.eval <- as.data.frame(matrix(ncol = 3, nrow = (length(try.k))))
+colnames(cluster.dist.eval) <- c('k', 'kmeans', 'hclust')
+
+for(i in 1:length(try.k)) {
+  cluster.dist.eval[i, 'k'] <- try.k[i]
+  cluster.dist.eval[i, 'kmeans'] <- clusterMeanDist(kmeans(som.events, centers = try.k[i], iter.max = 20)$cluster)
+  cluster.dist.eval[i, 'hclust'] <- clusterMeanDist(cutree(hclust(vegdist(som.events)), k = try.k[i]))
+}
+
+plot(cluster.dist.eval[, 'kmeans'] ~ try.k,
+     type = 'l')
+
+lines(cluster.dist.eval[, 'hclust'] ~ try.k,
+      col = 'red')
+
+legend('topright',
+       legend = c('k-means', 'hierarchical'),
+       col = c('black', 'red'),
+       lty = c(1, 1))
+
+```
+
+## evaluate clustering
+
+"Having picked a reasonable value for k (let’s say k = 20) we can evaluate different clustering algorithms.  For our data k-means almost always performs best, but you should choose what works best for your data.  Here will evaluate k-means, hierarchical clustering, and model-based clustering.  What we’re looking for in the plots is a clustering method that produces contiguous classes.  If classes are spread all across the map, then the clustering algorithm isn’t capturing the structure of the SOM well."
+
+```{r}
+#### evaluate clustering algorithms ####
+
+## Having selected a reasonable value for k, evaluate different clustering algorithms.
+
+
+## Define a function for make a simple plot of clustering output.
+## This is the same as previousl plotting, but we define the function
+## here as we wanted to play with the color earlier.
+
+plotSOM <- function(clusters){
+  plot(som.model,
+       type = 'mapping',
+       bg = som.events.colors,
+       keepMargins = F,
+       col = NA)
+  
+  add.cluster.boundaries(som.model, clusters)
+}
+
+## Try several different clustering algorithms, and, if desired, different values for k
+
+cluster.tries <- list()
+
+for(k in c(10, 20, 40)){
+  
+  
+  ## k-means clustering
+  
+  som.cluster.k <- kmeans(som.events, centers = k, iter.max = 100, nstart = 10)$cluster # k-means
+  
+  ## hierarchical clustering
+  
+  som.dist <- dist(som.events) # hierarchical, step 1
+  som.cluster.h <- cutree(hclust(som.dist), k = k) # hierarchical, step 2
+  
+  ## capture outputs
+  cluster.tries[[paste0('som.cluster.k.', k)]] <- som.cluster.k
+  cluster.tries[[paste0('som.cluster.h.', k)]] <- som.cluster.h
+
+}
+
+
+## Take a look at the various clusters.  You're looking for the algorithm that produces the
+## least fragmented clusters.
+print('cluster size = 10')
+plotSOM(cluster.tries$som.cluster.k.10)
+plotSOM(cluster.tries$som.cluster.h.10)
+
+print('cluster size = 20')  
+plotSOM(cluster.tries$som.cluster.k.20)
+plotSOM(cluster.tries$som.cluster.h.20)
+
+print('cluster size = 40')
+plotSOM(cluster.tries$som.cluster.k.40)
+plotSOM(cluster.tries$som.cluster.h.40)
+
+```
+
+## Classification model
+
+"The SOM and final map unit clustering represent a classification model that can be saved for use with later data.  Once huge advantage to using SOMs over other analysis methods (e.g., ordination techniques) is their usefulness for organizing newly collected data.  New data, if necessary scared and normalized in the same way as the training data, can be classified by finding the map unit with the minimum distance to the new observation.  To demonstrate this, we’ll generate and classify a small new RGB dataset (in reality classifying in this way is very efficient, and could accommodate a huge number of new observations).  First, we save the SOM and final clustering."
+
+
+```{r}
+## The SOM and map unit clustering represent a classification model.  These can be saved for
+## later use.
+
+som.cluster <- som.cluster.k
+som.notes <- c('Clustering based on k-means')
+
+save(file = 'som_model_demo.Rdata', list = c('som.cluster', 'som.notes', 'som.model', 'som.events.colors'))
+
+```
+
+### generate new data and classify
+
+```{r}
+#### classification ####
+
+## make a new dataset to classify ##
+
+new.data.size <- 20
+new.data <- as.data.frame(matrix(nrow = new.data.size, ncol = 3))
+colnames(new.data) <- c('R', 'G', 'B')
+
+new.data$R <- sample(0:255, new.data.size, replace = T)
+new.data$G <- sample(0:255, new.data.size, replace = T)
+new.data$B <- sample(0:255, new.data.size, replace = T)
+
+## get the closest map unit to each point
+
+new.data.units <- map(som.model, newdata = data.matrix(new.data))
+
+## get the classification for closest map units
+
+new.data.classes <- som.cluster[new.data.units$unit.classif]
+
+## compare colors of the new data, unit, and class, first define a function
+## to calculate the mean colors for each cluster
+
+clusterMeanColor <- function(clusters){
+  cluster.means = c()
+  som.codes <- som.model$codes[[1]]
+  
+  for(c in sort(unique(clusters))){
+    temp.members <- which(clusters == c)
+    
+    if(length(temp.members) > 1){
+      temp.codes <- som.codes[temp.members,]
+      temp.means <- colMeans(temp.codes)
+      temp.col <- rgb(temp.means[1], temp.means[2], temp.means[3], maxColorValue = 255)
+      cluster.means <- append(cluster.means, temp.col)
+    }else({
+      temp.codes <- som.codes[temp.members,]
+      temp.col <- rgb(temp.codes[1], temp.codes[2], temp.codes[3], maxColorValue = 255)
+      cluster.means <- append(cluster.means, temp.col)
+      })
+  }
+  
+  return(cluster.means)
+  
+}
+
+class.colors <- clusterMeanColor(som.cluster)
+
+plot(1:length(new.data$R), rep(1, length(new.data$R)),
+     col = rgb(new.data$R, new.data$G, new.data$B, maxColorValue = 255),
+     ylim = c(0,4),
+     pch = 19,
+     cex = 3,
+     xlab = 'New data',
+     yaxt = 'n',
+     ylab = 'Level')
+
+axis(2, at = c(1, 2, 3), labels = c('New data', 'Unit', 'Class'))
+
+points(1:length(new.data.units$unit.classif), rep(2, length(new.data.units$unit.classif)),
+     col = som.events.colors[new.data.units$unit.classif],
+     pch = 19,
+     cex = 3)
+
+points(1:length(new.data.classes), rep(3, length(new.data.classes)),
+       col = class.colors[new.data.classes],
+       pch = 19,
+       cex = 3)
+rm(list = ls())
+```
+"Looks pretty good! Despite defining only 20 classes, class seems to be a reasonable representation of the original data. Only slight differences in color can be observed between the data, winning map unit, and class."
+
+
+# IPCC region example
+
+## helper function to process time series 
+
+And some package and labeling info
+
+```{r}
+#TODO harmonize color bars? at least for precip so it has brown for decreases
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(kohonen)
+library(vegan)  # for vegdist function which gives a dissimilarity index
+
+timeseries_dir <- 'extracted_timeseries/'
+
+# get ecs ordering/labels
+esm_labels <- read.csv(paste0(timeseries_dir,'global_tas_allesms.csv'), stringsAsFactors = FALSE) %>%
+  select(esm) %>% distinct %>% 
+  mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
+         ECS_order = as.integer(row.names(.)))
+
+process_time_series <- function(time_series_df, esm_label_info,
+                                hist_start = 1995, hist_end = 2014){
+  # Get ensemble member values for projection runs:
+  # 1. 2080-2099 average
+  # 2. loess detrend each ensemble member to get IAV
+  #
+  # split by run
+  non_hist <- time_series_df %>% 
+    filter(experiment != 'historical') %>% 
+    select(year, ann_agg, esm, experiment, ensemble, variable, region)
+  
+  grouped <- split(non_hist, f = list(non_hist$esm, 
+                                      non_hist$experiment,
+                                      non_hist$ensemble, 
+                                      non_hist$variable ,
+                                      non_hist$region) )
+  # split creates group of every possible combo of the variables and fills in
+  # empty dataframes for the ones that don't exist in data. Drop those
+  grouped <- grouped[lapply(grouped, nrow)>0]
+  
+  processed_groups <- lapply(grouped, FUN = function(run_df){
+    loess_resids <- loess(run_df$ann_agg ~ run_df$year)$residuals
+    
+    run_df %>%
+      filter(year >= 2080, year <= 2099) %>%
+      group_by(esm, experiment, ensemble, variable, region) %>%
+      summarise(average_2080_2099 = mean(ann_agg)) %>% 
+      ungroup  %>%
+      mutate(iasd = sd((loess_resids))) ->
+      output_df
+    
+    return(output_df)
+    
+  })
+  
+  individual_stats <- do.call(bind_rows, processed_groups)
+  rm(non_hist)
+  rm(grouped)
+  rm(processed_groups)
+  
+  # calculate ensemble averages
+  individual_stats %>%
+    group_by(esm, experiment, variable,region) %>%
+    summarise(average_2080_2099 = mean(average_2080_2099),
+              iasd = mean(iasd)) %>%
+    ungroup ->
+    ensemble_stats
+  
+  
+  # get ensemble average historical average value:
+  time_series_df %>%
+    filter(experiment == 'historical',
+           year >= hist_start,
+           year <= hist_end) %>%
+    group_by(esm, experiment, ensemble, variable, region) %>%
+    summarise(historical_average = mean(ann_agg)) %>%
+    ungroup %>%
+    group_by(esm, experiment, variable, region) %>%
+    summarise(historical_average = mean(historical_average)) %>%
+    ungroup %>%
+    select(-experiment) ->
+    historical_ens
+  
+  
+  # shape and calculate changes for plotting:
+  ensemble_stats %>%
+    left_join(historical_ens, by = c('esm', 'variable', 'region')) %>%
+    left_join(esm_label_info, by = 'esm') %>%
+    mutate(change = average_2080_2099 - historical_average,
+           pct_change = 100*(average_2080_2099 - historical_average)/historical_average) ->
+    plot_tbl
+  
+return(plot_tbl)
+}
+```
+
+
+## load for an ESM
+```{r}
+region_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_tas_CESM2-WACCM_timeseries_1980_2099.csv'),
+                              stringsAsFactors = FALSE) %>% mutate(region = acronym)
+
+region_tas_summary <- suppressMessages(process_time_series(time_series_df = region_timeseries, esm_label_info = esm_labels))
+
+
+region_pr_summary <- suppressMessages(process_time_series(time_series_df = 
+                                                            read.csv(paste0(timeseries_dir, 'IPCC_land_regions_pr_CESM2-WACCM_timeseries_1980_2099.csv'),
+                                                                     stringsAsFactors = FALSE) %>%
+                                                            rename(ann_agg=pr) %>% 
+                                                            mutate(region = acronym) ,
+                                                          esm_label_info = esm_labels))
+
+print(head(region_tas_summary))
+print(head(region_pr_summary))
+```
+
+## reshape so each row is an observation
+
+observation = esm - experiment - region - tas change-tas iasd - pr pct change
+
+```{r}
+region_tas_summary %>% 
+  select(esm, experiment, region, iasd, change) %>%
+  rename(tas_change = change) %>%
+  left_join(region_pr_summary %>% 
+              select(esm, experiment, region, pct_change) %>% 
+              rename(pr_pct = pct_change),
+                     by = c('esm', 'experiment', 'region')) ->
+  region_summary
+
+print(head(region_summary))
+
+```
+
+```{r, echo=FALSE}
+# cleanup
+rm(region_timeseries)
+rm(region_tas_summary)
+rm(region_pr_summary)
+```
+
+
+## test 1
+
+let's see if it can learn the experiment or region clustering of the data points if I only give the numerical values
+
+```{r}
+region_numerical <- as.data.frame(region_summary[c('iasd', "tas_change", "pr_pct")])
+
+#### train the SOM ####
+sample.size <- nrow(region_numerical)
+print(paste('Num Observations is', sample.size ))
+
+## define a grid for the SOM and train
+grid.size <- ceiling(sample.size ^ (1/2.5))
+som.grid <- somgrid(xdim = grid.size, ydim = grid.size, topo = 'hexagonal', toroidal = T)
+som.model <- som(data.matrix(region_numerical), grid = som.grid)
+```
+
+
+```{r}
+## extract some data to make it easier to use
+
+som.events <- som.model$codes[[1]]
+print(som.events)
+
+# assign a color to each event because we have 3 metrics
+# red = iasd
+# green = temperature change
+# blue = precip change
+som.events.colors <- rgb( scales::rescale(som.events[,1], to =c(0,255)),
+                          scales::rescale(som.events[,2], to =c(0,255)) ,
+                         scales::rescale(som.events[,3], to =c(0,255)), 
+                         maxColorValue = 255)
+
+# calculate a distance matrix
+som.dist <- as.matrix(dist(som.events))
+
+```
+
+### plots
+```{r}
+## generate a plot of the untrained data.  this isn't really the configuration at first iteration, but
+## serves as an example
+plot(som.model,
+     type = 'mapping',
+     bg = som.events.colors[sample.int(length(som.events.colors), size = length(som.events.colors))],
+     keepMargins = F,
+     col = NA,
+     main = '')
+
+## generate a plot after training.
+plot(som.model,
+     type = 'mapping',
+     bg = som.events.colors,
+     keepMargins = F,
+     col = NA,
+     main = '')
+```
+### look for num clusters
+```{r}
+#### look for a reasonable number of clusters ####
+
+## Evaluate within cluster distances for different values of k.  This is
+## more dependent on the number of map units in the SOM than the structure
+## of the underlying data, but until we have a better way...
+
+## Define a function to calculate mean distance within each cluster.  This
+## is roughly analogous to the within clusters ss approach
+
+clusterMeanDist <- function(clusters){
+  cluster.means = c()
+  
+  for(c in unique(clusters)){
+    temp.members <- which(clusters == c)
+    
+    if(length(temp.members) > 1){
+      temp.dist <- som.dist[temp.members,]
+      temp.dist <- temp.dist[,temp.members]
+      cluster.means <- append(cluster.means, mean(temp.dist))
+    }else(cluster.means <- 0)
+  }
+  
+  return(mean(cluster.means))
+  
+}
+
+try.k <- 2:62
+cluster.dist.eval <- as.data.frame(matrix(ncol = 3, nrow = (length(try.k))))
+colnames(cluster.dist.eval) <- c('k', 'kmeans', 'hclust')
+
+for(i in 1:length(try.k)) {
+  cluster.dist.eval[i, 'k'] <- try.k[i]
+  cluster.dist.eval[i, 'kmeans'] <- clusterMeanDist(kmeans(som.events, centers = try.k[i], iter.max = 20)$cluster)
+  cluster.dist.eval[i, 'hclust'] <- clusterMeanDist(cutree(hclust(vegdist(som.events)), k = try.k[i]))
+}
+
+plot(cluster.dist.eval[, 'kmeans'] ~ try.k,
+     type = 'l')
+
+lines(cluster.dist.eval[, 'hclust'] ~ try.k,
+      col = 'red')
+
+legend('topright',
+       legend = c('k-means', 'hierarchical'),
+       col = c('black', 'red'),
+       lty = c(1, 1))
+
+```
+
+
+
+
+Try k = 9
+
+```{r}
+# Define a function for make a simple plot of clustering output.
+## This is the same as previousl plotting, but we define the function
+## here as we wanted to play with the color earlier.
+
+plotSOM <- function(clusters){
+  plot(som.model,
+       type = 'mapping',
+       bg = som.events.colors,
+       keepMargins = F,
+       col = NA)
+  
+  add.cluster.boundaries(som.model, clusters, color = 'red')
+}
+
+cluster.tries <- list()
+
+for(k in c(5, 8, 9, 10)){
+   ## k-means clustering
+  
+  som.cluster.k <- kmeans(som.events, centers = k, iter.max = 100, nstart = 10)$cluster # k-means
+  
+  ## hierarchical clustering
+  
+  som.dist <- dist(som.events) # hierarchical, step 1
+  som.cluster.h <- cutree(hclust(som.dist), k = k) # hierarchical, step 2
+
+  cluster.tries[[paste0('som.cluster.k.', k)]] <- som.cluster.k
+  cluster.tries[[paste0('som.cluster.h.', k)]] <- som.cluster.h
+}
+
+print('cluster size = 5')
+plotSOM(cluster.tries$som.cluster.k.5)
+plotSOM(cluster.tries$som.cluster.h.5)
+
+print('cluster size = 8')
+plotSOM(cluster.tries$som.cluster.k.8)
+plotSOM(cluster.tries$som.cluster.h.8)
+
+print('cluster size = 9')  
+plotSOM(cluster.tries$som.cluster.k.9)
+plotSOM(cluster.tries$som.cluster.h.9)
+
+print('cluster size = 10')
+plotSOM(cluster.tries$som.cluster.k.10)
+plotSOM(cluster.tries$som.cluster.h.10)
+```
+
+
+
