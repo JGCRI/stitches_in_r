@@ -1,0 +1,814 @@
+---
+title: "som-esm1 IPCC region example"
+author: "ACS"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+
+# helper function to process time series 
+
+And some package and labeling info
+
+```{r}
+#TODO harmonize color bars? at least for precip so it has brown for decreases
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(kohonen)
+library(vegan)  # for vegdist function which gives a dissimilarity index
+
+
+
+timeseries_dir <- 'extracted_timeseries/'
+
+# get ecs ordering/labels
+esm_labels <- read.csv(paste0(timeseries_dir,'global_tas_allesms.csv'), stringsAsFactors = FALSE) %>%
+  select(esm) %>% distinct %>% 
+  mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
+         ECS_order = as.integer(row.names(.)))
+
+process_time_series <- function(time_series_df, esm_label_info,
+                                hist_start = 1995, hist_end = 2014){
+  # Get ensemble member values for projection runs:
+  # 1. 2080-2099 average
+  # 2. loess detrend each ensemble member to get IAV
+  #
+  # split by run
+  non_hist <- time_series_df %>% 
+    filter(experiment != 'historical') %>% 
+    select(year, ann_agg, esm, experiment, ensemble, variable, region)
+  
+  grouped <- split(non_hist, f = list(non_hist$esm, 
+                                      non_hist$experiment,
+                                      non_hist$ensemble, 
+                                      non_hist$variable ,
+                                      non_hist$region) )
+  # split creates group of every possible combo of the variables and fills in
+  # empty dataframes for the ones that don't exist in data. Drop those
+  grouped <- grouped[lapply(grouped, nrow)>0]
+  
+  processed_groups <- lapply(grouped, FUN = function(run_df){
+    loess_resids <- loess(run_df$ann_agg ~ run_df$year)$residuals
+    
+    run_df %>%
+      filter(year >= 2080, year <= 2099) %>%
+      group_by(esm, experiment, ensemble, variable, region) %>%
+      summarise(average_2080_2099 = mean(ann_agg)) %>% 
+      ungroup  %>%
+      mutate(iasd = sd((loess_resids))) ->
+      output_df
+    
+    return(output_df)
+    
+  })
+  
+  individual_stats <- do.call(bind_rows, processed_groups)
+  rm(non_hist)
+  rm(grouped)
+  rm(processed_groups)
+  
+  # calculate ensemble averages
+  individual_stats %>%
+    group_by(esm, experiment, variable,region) %>%
+    summarise(average_2080_2099 = mean(average_2080_2099),
+              iasd = mean(iasd)) %>%
+    ungroup ->
+    ensemble_stats
+  
+  
+  # get ensemble average historical average value:
+  time_series_df %>%
+    filter(experiment == 'historical',
+           year >= hist_start,
+           year <= hist_end) %>%
+    group_by(esm, experiment, ensemble, variable, region) %>%
+    summarise(historical_average = mean(ann_agg)) %>%
+    ungroup %>%
+    group_by(esm, experiment, variable, region) %>%
+    summarise(historical_average = mean(historical_average)) %>%
+    ungroup %>%
+    select(-experiment) ->
+    historical_ens
+  
+  
+  # shape and calculate changes for plotting:
+  ensemble_stats %>%
+    left_join(historical_ens, by = c('esm', 'variable', 'region')) %>%
+    left_join(esm_label_info, by = 'esm') %>%
+    mutate(change = average_2080_2099 - historical_average,
+           pct_change = 100*(average_2080_2099 - historical_average)/historical_average) ->
+    plot_tbl
+  
+return(plot_tbl)
+}
+
+prep_esm_TP_data <- function(esmname){
+  
+  region_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_tas_', esmname, '_timeseries_1980_2099.csv'),
+                              stringsAsFactors = FALSE) %>% mutate(region = acronym)
+  
+  region_tas_summary <- suppressMessages(process_time_series(time_series_df = region_timeseries, esm_label_info = esm_labels))
+  
+  region_pr_summary <- suppressMessages(process_time_series(time_series_df = 
+                                                            read.csv(paste0(timeseries_dir, 'IPCC_land_regions_pr_', esmname,'_timeseries_1980_2099.csv'),
+                                                                     stringsAsFactors = FALSE) %>%
+                                                            rename(ann_agg=pr) %>% 
+                                                            mutate(region = acronym) ,
+                                                          esm_label_info = esm_labels))
+  
+  # reshape so each row is an observation
+  # observation = esm - experiment - region - tas change-tas iasd - pr pct change
+  region_tas_summary %>% 
+    select(esm, experiment, region, iasd, change) %>%
+    rename(tas_change = change) %>%
+    left_join(region_pr_summary %>%
+                select(esm, experiment, region, pct_change) %>% 
+                rename(pr_pct = pct_change),
+              by = c('esm', 'experiment', 'region')) ->
+    region_summary
+
+return(region_summary)
+  
+}
+```
+
+
+
+# load for an ESM
+
+Consider an observation = esm - experiment - region : tas change-tas iasd - pr pct change
+
+```{r}
+
+region_summary <- prep_esm_TP_data(esmname =  'GFDL-ESM4')
+region_summary %>% 
+  bind_rows(prep_esm_TP_data(esmname =  'CESM2-WACCM')) ->
+  region_summary_main
+
+# make a copy to operate on
+region_summary <- region_summary_main
+print(head(region_summary))
+
+```
+
+# Spatial info
+
+default SOM packages can only operate on numerical data, not categorical. So we have to assign some amount of spatial location numerical info to each acronym. Ideally mean lat-lon in the shape?
+
+
+
+```{r}
+
+library(sf)
+
+shp <- st_read(dsn = 'IPCC-WGI-reference-regions-v4_shapefile/IPCC-WGI-reference-regions-v4.shp', stringsAsFactors = F)
+
+# add a numerical region id
+shp %>% 
+  mutate(region_id = as.integer(row.names(.))) ->
+  shp
+
+# add coordinate info probably
+shp1 <-  st_transform(shp, "+proj=longlat +ellps=WGS84 +datum=WGS84")
+
+# extract
+coords <- as.data.frame(st_coordinates(shp1))
+
+
+# get a mean lon and lat value in each shape
+coords %>%
+  rename(lon = X, lat = Y, region_id = L3) %>%
+  left_join(as.data.frame(shp) %>% select(region_id, Acronym), by = 'region_id') %>%
+  filter(grepl('PO', Acronym)) %>% 
+  # have to have lon on 0:360 so th pacific ocean behaves even though not
+  # looking at that here
+  mutate(lon_360 = if_else(lon >=0, lon, lon+360))%>%
+  group_by(region_id) %>%
+  summarise(mean_lon = mean(lon_360),
+            mean_lat = mean(lat)) %>%
+  ungroup  %>%
+  mutate(mean_lon = if_else(mean_lon >= 0 & mean_lon <= 180, 
+                            mean_lon, mean_lon - 360) ) ->
+  mean_pts_PO
+
+coords %>%
+  rename(lon = X, lat = Y, region_id = L3) %>%
+  left_join(as.data.frame(shp) %>% select(region_id, Acronym), by = 'region_id') %>%
+  filter(!grepl('PO', Acronym)) %>% 
+  # have to have lon on 0:360 so th pacific ocean behaves even though not
+  # looking at that here
+  group_by(region_id) %>%
+  summarise(mean_lon = mean(lon),
+            mean_lat = mean(lat)) %>%
+  ungroup  %>% 
+  bind_rows(mean_pts_PO)->
+  mean_pts 
+
+
+```
+
+
+```{r, fig.width=14, fig.height=10}
+# Join to the shape file and make sure this very simple way of
+# doing things ends up with a lon lat that is actually in each region
+shp %>%
+  left_join(mean_pts, by = 'region_id') ->
+  shp
+
+ggplot() +
+  geom_sf(data = shp  ) +
+  geom_point(data = shp, mapping = aes(x = mean_lon, y = mean_lat), color = 'red') +
+  geom_text(data = shp, mapping = aes(label = Acronym, x = mean_lon, y= mean_lat), size =8)
+
+```
+
+
+
+# test 0 convert to rgb first
+ we have 3 variables per observarion = experimentXregion -> convert to rgb values
+ 
+ - looking across ESMs, we'll want to make sure we have them all on consistent range before converting to (0,255) 
+ - each color/family of colors does have a physical interpretation in terms of iasd, t, p
+ 
+ 
+
+ 
+```{r}
+# convert to RGB
+region_summary %>%
+  filter(experiment != 'ssp119') ->
+  region_summary 
+region_summary$r <- scales::rescale(region_summary$iasd, to =c(0,255))
+region_summary$g <- scales::rescale(region_summary$tas_change, to =c(0,255))
+region_summary$b <- scales::rescale(region_summary$pr_pct, to =c(0,255))
+
+
+# add spatial numerical info
+
+
+region_numerical <- as.data.frame(region_summary[c('r', "g", "b")])
+```
+
+
+
+```{r}
+set.seed(11)
+#### train the SOM ####
+sample.size <- nrow(region_numerical)
+print(paste('Num Observations is', sample.size ))
+
+## define a grid for the SOM and train
+grid.size <- ceiling(sample.size ^ (1/2.5))
+som.grid <- somgrid(xdim = grid.size, ydim = grid.size, topo = 'hexagonal', toroidal = T)
+som.model <- som(data.matrix(region_numerical), grid = som.grid)
+
+```
+
+```{r}
+# extract some values to be useful
+som.events <- som.model$codes[[1]]
+
+# assign a color to each event because we have 3 metrics
+# red = iasd
+# green = temperature change
+# blue = precip change
+som.events.colors <- rgb( som.events[,1],                 
+                          som.events[,2],               
+                          som.events[,3],                 
+                          maxColorValue = 255)
+
+# calculate a distance matrix
+som.dist <- as.matrix(dist(som.events))
+```
+
+
+```{r}
+plot(som.model,
+     type = 'mapping',
+     bg = som.events.colors,
+     keepMargins = F,
+     col = NA,
+     main = '')
+
+plot(som.model, type = 'count')
+```
+
+Let's label each observation with its SOM classification
+
+```{r}
+region_summary$rgb_class <- som.model$unit.classif
+
+region_summary %>%
+  left_join(data.frame(rgb_class = 1:121) %>%
+              mutate(color = som.events.colors),
+            by='rgb_class') ->
+  region_data
+```
+
+and the original color:
+```{r}
+region_data %>%
+  mutate(orig_color = rgb(.$r, .$g, .$b, maxColorValue  = 255)) ->
+  tmp
+
+ggplot(tmp) + geom_tile(mapping = aes( x = interaction(experiment, esm), y = region, fill = orig_color) ) +
+  scale_fill_manual(values = tmp$orig_color) +
+  theme(legend.position='none',
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+ggplot(tmp) + geom_tile(mapping = aes( x = interaction( esm, experiment), y = region, fill = orig_color) ) +
+  scale_fill_manual(values = tmp$orig_color) +
+  theme(legend.position='none',
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+
+
+## how many clusters
+
+```{r}
+
+#### look for a reasonable number of clusters ####
+
+## Evaluate within cluster distances for different values of k.  This is
+## more dependent on the number of map units in the SOM than the structure
+## of the underlying data, but until we have a better way...
+
+## Define a function to calculate mean distance within each cluster.  This
+## is roughly analogous to the within clusters ss approach
+
+clusterMeanDist <- function(clusters){
+  cluster.means = c()
+  
+  for(c in unique(clusters)){
+    temp.members <- which(clusters == c)
+    
+    if(length(temp.members) > 1){
+      temp.dist <- som.dist[temp.members,]
+      temp.dist <- temp.dist[,temp.members]
+      cluster.means <- append(cluster.means, mean(temp.dist))
+    }else(cluster.means <- 0)
+  }
+  
+  return(mean(cluster.means))
+  
+}
+
+try.k <- 2:60
+cluster.dist.eval <- as.data.frame(matrix(ncol = 3, nrow = (length(try.k))))
+colnames(cluster.dist.eval) <- c('k', 'kmeans', 'hclust')
+
+for(i in 1:length(try.k)) {
+  cluster.dist.eval[i, 'k'] <- try.k[i]
+  cluster.dist.eval[i, 'kmeans'] <- clusterMeanDist(kmeans(som.events, centers = try.k[i], iter.max = 20)$cluster)
+  cluster.dist.eval[i, 'hclust'] <- clusterMeanDist(cutree(hclust(vegdist(som.events)), k = try.k[i]))
+}
+
+plot(cluster.dist.eval[, 'kmeans'] ~ try.k,
+     type = 'l')
+
+lines(cluster.dist.eval[, 'hclust'] ~ try.k,
+      col = 'red')
+
+legend('topright',
+       legend = c('k-means', 'hierarchical'),
+       col = c('black', 'red'),
+       lty = c(1, 1))
+```
+
+
+
+
+```{r}
+#### evaluate clustering algorithms ####
+
+## Having selected a reasonable value for k, evaluate different clustering algorithms.
+
+## Define a function for make a simple plot of clustering output.
+## This is the same as previousl plotting, but we define the function
+## here as we wanted to play with the color earlier.
+
+plotSOM <- function(clusters){
+  plot(som.model,
+       type = 'mapping',
+       bg = som.events.colors,
+       keepMargins = F,
+       col = NA)
+  
+  add.cluster.boundaries(som.model, clusters)
+}
+
+## Try several different clustering algorithms, and, if desired, different values for k
+
+cluster.tries <- list()
+
+for(k in c(10,12,20)){
+ 
+  ## k-means clustering
+  
+  som.cluster.k <- kmeans(som.events, centers = k, iter.max = 100, nstart = 10)$cluster # k-means
+  
+  ## hierarchical clustering
+  
+  som.dist <- dist(som.events) # hierarchical, step 1
+  som.cluster.h <- cutree(hclust(som.dist), k = k) # hierarchical, step 2
+  
+  ## capture outputs
+  cluster.tries[[paste0('som.cluster.k.', k)]] <- som.cluster.k
+  cluster.tries[[paste0('som.cluster.h.', k)]] <- som.cluster.h
+}
+
+## Take a look at the various clusters.  You're looking for the algorithm that produces the
+## least fragmented clusters.
+plotSOM(cluster.tries$som.cluster.k.10)
+plotSOM(cluster.tries$som.cluster.h.10)
+
+plotSOM(cluster.tries$som.cluster.k.12)
+plotSOM(cluster.tries$som.cluster.h.12)
+
+plotSOM(cluster.tries$som.cluster.k.20)
+plotSOM(cluster.tries$som.cluster.h.20)
+
+```
+## combine cluster with som for classification
+```{r}
+region_data %>%
+  left_join(data.frame(rgb_class = 1:121, h_cluster10 = cluster.tries$som.cluster.h.10), by = 'rgb_class') %>%
+  left_join(data.frame(rgb_class = 1:121, k_cluster10 = cluster.tries$som.cluster.k.10), by = 'rgb_class') %>%
+  left_join(data.frame(rgb_class = 1:121, h_cluster12 = cluster.tries$som.cluster.h.12), by = 'rgb_class') %>%
+  left_join(data.frame(rgb_class = 1:121, k_cluster12 = cluster.tries$som.cluster.k.12), by = 'rgb_class') %>%
+  left_join(data.frame(rgb_class = 1:121, h_cluster20 = cluster.tries$som.cluster.h.20), by = 'rgb_class') %>%
+  left_join(data.frame(rgb_class = 1:121, k_cluster20 = cluster.tries$som.cluster.k.20), by = 'rgb_class')->
+  clustered
+```
+
+```{r}
+library(sf)
+
+shp <- st_read(dsn = 'IPCC-WGI-reference-regions-v4_shapefile/IPCC-WGI-reference-regions-v4.shp', stringsAsFactors = F)
+
+# add model 1 groups
+shp %>% 
+  left_join(region_data, by = c('Acronym' = 'region')) ->
+  shp1
+
+
+# color bar isn't right but 126 and 585 don't overlap so probably ok.
+ggplot() +
+  geom_sf(data = shp1 %>% filter(esm == 'GFDL-ESM4', experiment == 'ssp126'), aes(fill = as.factor(rgb_class)) ) +
+  scale_fill_manual(values = (shp1 %>% filter(esm == 'GFDL-ESM4',experiment == 'ssp126'))$color)
+
+ggplot() +
+  geom_sf(data = shp1 %>% filter(esm == 'CESM2-WACCM', experiment == 'ssp126'), aes(fill = as.factor(rgb_class)) ) +
+  scale_fill_manual(values = (shp1 %>% filter(esm == 'CESM2-WACCM',experiment == 'ssp126'))$color)
+```
+
+```{r}
+library(sf)
+
+shp <- st_read(dsn = 'IPCC-WGI-reference-regions-v4_shapefile/IPCC-WGI-reference-regions-v4.shp', stringsAsFactors = F)
+
+# add model 1 groups
+shp %>% 
+  left_join(region_data, by = c('Acronym' = 'region')) ->
+  shp1
+
+
+# color bar isn't right but 126 and 585 don't overlap so probably ok.
+ggplot() +
+  geom_sf(data = shp1 %>% filter(esm == 'GFDL-ESM4', experiment == 'ssp126'), aes(fill = as.factor(rgb_class)) ) +
+  scale_fill_manual(values = (shp1 %>% filter(esm == 'GFDL-ESM4',experiment == 'ssp126'))$color)
+
+ggplot() +
+  geom_sf(data = shp1 %>% filter(esm == 'CESM2-WACCM', experiment == 'ssp126'), aes(fill = as.factor(rgb_class)) ) +
+  scale_fill_manual(values = (shp1 %>% filter(esm == 'CESM2-WACCM',experiment == 'ssp126'))$color)
+
+# ggplot() +
+#   geom_sf(data = shp1 %>% filter(experiment == 'ssp245'), aes(fill = as.factor(rgb_class)) ) +
+#   scale_fill_manual(values = (shp1 %>% filter(experiment == 'ssp245'))$color)
+# 
+# ggplot() +
+#   geom_sf(data = shp1 %>% filter(experiment == 'ssp370'), aes(fill = as.factor(rgb_class)) ) +
+#   scale_fill_manual(values = (shp1 %>% filter(experiment == 'ssp370'))$color)
+
+ggplot() +
+  geom_sf(data = shp1 %>% filter(experiment == 'ssp585'), aes(fill = as.factor(rgb_class)) ) +
+  scale_fill_manual(values = (shp1 %>% filter(experiment == 'ssp585'))$color)
+```
+
+# test 1
+
+let's see if it can learn the experiment or region clustering of the data points if I only give the numerical values
+
+```{r}
+region_numerical <- as.data.frame(region_summary[c('iasd', "tas_change", "pr_pct")])
+
+#### train the SOM ####
+sample.size <- nrow(region_numerical)
+print(paste('Num Observations is', sample.size ))
+
+## define a grid for the SOM and train
+grid.size <- 6 # ceiling(sample.size ^ (1/2.5))
+som.grid <- somgrid(xdim = grid.size, ydim = grid.size, topo = 'hexagonal', toroidal = T)
+som.model <- som(data.matrix(region_numerical), grid = som.grid)
+```
+
+
+```{r}
+## extract some data to make it easier to use
+
+som.events <- som.model$codes[[1]]
+print(som.events)
+
+# assign a color to each event because we have 3 metrics
+# red = iasd
+# green = temperature change
+# blue = precip change
+som.events.colors <- rgb( scales::rescale(som.events[,1], to =c(0,255)),
+                          scales::rescale(som.events[,2], to =c(0,255)) ,
+                         scales::rescale(som.events[,3], to =c(0,255)), 
+                         maxColorValue = 255)
+
+# calculate a distance matrix
+som.dist <- as.matrix(dist(som.events))
+
+```
+
+## plots
+
+
+### num observations per node
+
+if nodes have no observations assigned, decrease size of grid
+
+```{r}
+plot(som.model, type = 'counts')
+```
+
+```{r}
+## generate a plot of the untrained data.  this isn't really the configuration at first iteration, but
+## serves as an example
+plot(som.model,
+     type = 'mapping',
+     bg = som.events.colors[sample.int(length(som.events.colors), size = length(som.events.colors))],
+     keepMargins = F,
+     col = NA,
+     main = '')
+
+## generate a plot after training.
+plot(som.model,
+     type = 'mapping',
+     bg = som.events.colors,
+     keepMargins = F,
+     col = NA,
+     main = '')
+```
+
+## look for num clusters
+```{r}
+#### look for a reasonable number of clusters ####
+
+## Evaluate within cluster distances for different values of k.  This is
+## more dependent on the number of map units in the SOM than the structure
+## of the underlying data, but until we have a better way...
+
+## Define a function to calculate mean distance within each cluster.  This
+## is roughly analogous to the within clusters ss approach
+
+clusterMeanDist <- function(clusters){
+  cluster.means = c()
+  
+  for(c in unique(clusters)){
+    temp.members <- which(clusters == c)
+    
+    if(length(temp.members) > 1){
+      temp.dist <- som.dist[temp.members,]
+      temp.dist <- temp.dist[,temp.members]
+      cluster.means <- append(cluster.means, mean(temp.dist))
+    }else(cluster.means <- 0)
+  }
+  
+  return(mean(cluster.means))
+  
+}
+
+try.k <- 2:62
+cluster.dist.eval <- as.data.frame(matrix(ncol = 3, nrow = (length(try.k))))
+colnames(cluster.dist.eval) <- c('k', 'kmeans', 'hclust')
+
+for(i in 1:length(try.k)) {
+  cluster.dist.eval[i, 'k'] <- try.k[i]
+  cluster.dist.eval[i, 'kmeans'] <- clusterMeanDist(kmeans(som.events, centers = try.k[i], iter.max = 20)$cluster)
+  cluster.dist.eval[i, 'hclust'] <- clusterMeanDist(cutree(hclust(vegdist(som.events)), k = try.k[i]))
+}
+
+plot(cluster.dist.eval[, 'kmeans'] ~ try.k,
+     type = 'l')
+
+lines(cluster.dist.eval[, 'hclust'] ~ try.k,
+      col = 'red')
+
+legend('topright',
+       legend = c('k-means', 'hierarchical'),
+       col = c('black', 'red'),
+       lty = c(1, 1))
+
+```
+
+
+
+
+Try k = 9
+
+```{r}
+# Define a function for make a simple plot of clustering output.
+## This is the same as previousl plotting, but we define the function
+## here as we wanted to play with the color earlier.
+
+plotSOM <- function(clusters){
+  plot(som.model,
+       type = 'mapping',
+       bg = som.events.colors,
+       keepMargins = F,
+       col = NA)
+  
+  add.cluster.boundaries(som.model, clusters, color = 'red')
+}
+
+cluster.tries <- list()
+
+for(k in c(5, 8, 9, 10)){
+   ## k-means clustering
+  
+  som.cluster.k <- kmeans(som.events, centers = k, iter.max = 100, nstart = 10)$cluster # k-means
+  
+  ## hierarchical clustering
+  
+  som.dist <- dist(som.events) # hierarchical, step 1
+  som.cluster.h <- cutree(hclust(som.dist), k = k) # hierarchical, step 2
+
+  cluster.tries[[paste0('som.cluster.k.', k)]] <- som.cluster.k
+  cluster.tries[[paste0('som.cluster.h.', k)]] <- som.cluster.h
+}
+
+print('cluster size = 5')
+plotSOM(cluster.tries$som.cluster.k.5)
+plotSOM(cluster.tries$som.cluster.h.5)
+
+print('cluster size = 8')
+plotSOM(cluster.tries$som.cluster.k.8)
+plotSOM(cluster.tries$som.cluster.h.8)
+
+print('cluster size = 9')  
+plotSOM(cluster.tries$som.cluster.k.9)
+plotSOM(cluster.tries$som.cluster.h.9)
+
+print('cluster size = 10')
+plotSOM(cluster.tries$som.cluster.k.10)
+plotSOM(cluster.tries$som.cluster.h.10)
+```
+
+
+
+
+# test 2 
+robustness in terms of model fit and grid size
+
+
+```{r}
+region_numerical <- as.data.frame(region_summary[c('iasd', "tas_change", "pr_pct")])
+
+#### train the SOM ####
+sample.size <- nrow(region_numerical)
+print(paste('Num Observations is', sample.size ))
+
+## define a grid for the SOM and train
+grid.size <- 3 # ceiling(sample.size ^ (1/2.5))
+som.grid <- somgrid(xdim = grid.size, ydim = grid.size, topo = 'hexagonal', toroidal = T)
+
+# 2 models with same grid size to test robustness across 
+som.model1 <- som(data.matrix(region_numerical), grid = som.grid)
+som.model2 <- som(data.matrix(region_numerical), grid = som.grid)
+```
+
+
+```{r}
+som.events1 <- som.model1$codes[[1]]
+
+# assign a color to each event because we have 3 metrics
+# red = iasd
+# green = temperature change
+# blue = precip change
+som.events.colors1 <- rgb( scales::rescale(som.events1[,1], to =c(0,255)),
+                          scales::rescale(som.events1[,2], to =c(0,255)) ,
+                         scales::rescale(som.events1[,3], to =c(0,255)), 
+                         maxColorValue = 255)
+
+# calculate a distance matrix
+som.dist1 <- as.matrix(dist(som.events1))
+
+# and for estimate 2
+som.events2 <- som.model2$codes[[1]]
+som.events.colors2 <- rgb( scales::rescale(som.events2[,1], to =c(0,255)),
+                          scales::rescale(som.events2[,2], to =c(0,255)) ,
+                         scales::rescale(som.events2[,3], to =c(0,255)), 
+                         maxColorValue = 255)
+
+# calculate a distance matrix
+som.dist2 <- as.matrix(dist(som.events2))
+
+
+```
+
+# key Q
+
+are the same observations getting assigned to the same nodes in each model
+
+```{r}
+region_summary$model1_unitclass <- som.model1$unit.classif
+region_summary$model2_unitclass <- som.model2$unit.classif
+
+
+region_summary %>% 
+  filter(model1_unitclass == 16)
+
+```
+
+```{r}
+library(sf)
+
+shp <- st_read(dsn = 'IPCC-WGI-reference-regions-v4_shapefile/IPCC-WGI-reference-regions-v4.shp', stringsAsFactors = F)
+
+# add model 1 groups
+shp %>% 
+  left_join(region_summary, by = c('Acronym' = 'region')) ->
+  shp1
+
+ggplot() +
+  geom_sf(data = shp1 %>% filter(experiment == 'ssp245'), aes(fill = as.factor(model1_unitclass))) 
+
+ggplot() +
+  geom_sf(data = shp1%>% filter(experiment == 'ssp245'), aes(fill = as.factor(model2_unitclass))) 
+
+# ggplot(region_summary %>% filter(experiment == 'ssp370')) +
+#   geom_point(mapping = aes(x = model1_unitclass, y = interaction(experiment, region)))
+# 
+# 
+# ggplot(region_summary %>% filter(experiment == 'ssp370')) +
+#   geom_point(mapping = aes(x = model2_unitclass, y = interaction(experiment, region)))
+
+```
+
+
+# plot number of observations assigned to each node
+```{r}
+plot(som.model1, type = 'counts')
+plot(som.model2, type = 'counts')
+```
+### heatmap
+
+```{r}
+plot(som.model1, type = 'property', 
+     property = getCodes(som.model1)[,2])
+
+plot(som.model2, type = 'property', 
+     property = getCodes(som.model2)[,2])
+```
+### fan diagrm
+```{r}
+plot(som.model1, type = 'codes')
+plot(som.model2, type = 'codes')
+```
+
+
+
+```{r}
+## generate a plot after training.
+plot(som.model1,
+     type = 'mapping',
+     bg = som.events.colors1,
+     keepMargins = F,
+     col = NA,
+     main = '')
+plot(som.model2,
+     type = 'mapping',
+     bg = rainbow(64),
+     keepMargins = F,
+     col = NA,
+     main = '')
+```
+
+# need to understand
+
+- robustness: different grid size hyperparameters, different realizations with the same grid size
+- Do any of those clusters correspond to different regions or scenarios
+- do different ESMs have differt biomes?
+
+- convert to rgb first
+
