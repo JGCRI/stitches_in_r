@@ -1,0 +1,473 @@
+---
+title: "som-esm2 IPCC region example - investigate grid size"
+author: "ACS"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+# Notes 
+
+Ok we've looked at a lot, maybe streamline to investigate grid size and whether a different grid size can make things more robust
+
+- we did 8x8 so we can go smaller or larger
+- 5x5, 6x6, 10x10 
+
+ - could do ensemble members instead of ensemble averages
+ 
+ - maybe we don't do the som at all, maybe we just plot a 4 panel map for each ESM with the color coming from T, P, iasd. The color is _sort of_ interpretable, especially  with all of the same ESMs on the same color wheel
+ 
+
+# helper function to process time series 
+
+And some package and labeling info
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(kohonen)
+library(vegan)  # for vegdist function which gives a dissimilarity index
+
+
+
+timeseries_dir <- 'extracted_timeseries/'
+
+# get ecs ordering/labels
+esm_labels <- read.csv(paste0(timeseries_dir,'global_tas_allesms.csv'), stringsAsFactors = FALSE) %>%
+  select(esm) %>% distinct %>% 
+  mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
+         ECS_order = as.integer(row.names(.)))
+print(esm_labels)
+
+process_time_series <- function(time_series_df, esm_label_info,
+                                hist_start = 1995, hist_end = 2014){
+  # Get ensemble member values for projection runs:
+  # 1. 2080-2099 average
+  # 2. loess detrend each ensemble member to get IAV
+  #
+  # split by run
+  non_hist <- time_series_df %>% 
+    filter(experiment != 'historical') %>% 
+    select(year, ann_agg, esm, experiment, ensemble, variable, region)
+  
+  grouped <- split(non_hist, f = list(non_hist$esm, 
+                                      non_hist$experiment,
+                                      non_hist$ensemble, 
+                                      non_hist$variable ,
+                                      non_hist$region) )
+  # split creates group of every possible combo of the variables and fills in
+  # empty dataframes for the ones that don't exist in data. Drop those
+  grouped <- grouped[lapply(grouped, nrow)>0]
+  
+  processed_groups <- lapply(grouped, FUN = function(run_df){
+    loess_resids <- loess(run_df$ann_agg ~ run_df$year)$residuals
+    
+    run_df %>%
+      filter(year >= 2080, year <= 2099) %>%
+      group_by(esm, experiment, ensemble, variable, region) %>%
+      summarise(average_2080_2099 = mean(ann_agg)) %>% 
+      ungroup  %>%
+      mutate(iasd = sd((loess_resids))) ->
+      output_df
+    
+    return(output_df)
+    
+  })
+  
+  individual_stats <- do.call(bind_rows, processed_groups)
+  rm(non_hist)
+  rm(grouped)
+  rm(processed_groups)
+  
+  # calculate ensemble averages
+  individual_stats %>%
+    group_by(esm, experiment, variable,region) %>%
+    summarise(average_2080_2099 = mean(average_2080_2099),
+              iasd = mean(iasd)) %>%
+    ungroup ->
+    ensemble_stats
+  
+  
+  # get ensemble average historical average value:
+  time_series_df %>%
+    filter(experiment == 'historical',
+           year >= hist_start,
+           year <= hist_end) %>%
+    group_by(esm, experiment, ensemble, variable, region) %>%
+    summarise(historical_average = mean(ann_agg)) %>%
+    ungroup %>%
+    group_by(esm, experiment, variable, region) %>%
+    summarise(historical_average = mean(historical_average)) %>%
+    ungroup %>%
+    select(-experiment) ->
+    historical_ens
+  
+  
+  # shape and calculate changes for plotting:
+  ensemble_stats %>%
+    left_join(historical_ens, by = c('esm', 'variable', 'region')) %>%
+    left_join(esm_label_info, by = 'esm') %>%
+    mutate(change = average_2080_2099 - historical_average,
+           pct_change = 100*(average_2080_2099 - historical_average)/historical_average) ->
+    plot_tbl
+  
+return(plot_tbl)
+}
+
+
+process_ens_time_series <- function(time_series_df, esm_label_info,
+                                hist_start = 1995, hist_end = 2014){
+  # Get ensemble member values for projection runs:
+  # 1. 2080-2099 average
+  # 2. loess detrend each ensemble member to get IAV
+  #
+  # split by run
+  non_hist <- time_series_df %>% 
+    filter(experiment != 'historical') %>% 
+    select(year, ann_agg, esm, experiment, ensemble, variable, region)
+  
+  grouped <- split(non_hist, f = list(non_hist$esm, 
+                                      non_hist$experiment,
+                                      non_hist$ensemble, 
+                                      non_hist$variable ,
+                                      non_hist$region) )
+  # split creates group of every possible combo of the variables and fills in
+  # empty dataframes for the ones that don't exist in data. Drop those
+  grouped <- grouped[lapply(grouped, nrow)>0]
+  
+  processed_groups <- lapply(grouped, FUN = function(run_df){
+    loess_resids <- loess(run_df$ann_agg ~ run_df$year)$residuals
+    
+    run_df %>%
+      filter(year >= 2080, year <= 2099) %>%
+      group_by(esm, experiment, ensemble, variable, region) %>%
+      summarise(average_2080_2099 = mean(ann_agg)) %>% 
+      ungroup  %>%
+      mutate(iasd = sd((loess_resids))) ->
+      output_df
+    
+    return(output_df)
+    
+  })
+  
+  individual_stats <- do.call(bind_rows, processed_groups)
+  rm(non_hist)
+  rm(grouped)
+  rm(processed_groups)
+  
+  # calculate ensemble averages
+  individual_stats ->
+    ensemble_stats
+  
+  
+  # get ensemble average historical average value:
+  time_series_df %>%
+    filter(experiment == 'historical',
+           year >= hist_start,
+           year <= hist_end) %>%
+    group_by(esm, experiment, ensemble, variable, region) %>%
+    summarise(historical_average = mean(ann_agg)) %>%
+    ungroup %>%
+    group_by(esm, experiment, variable, region) %>%
+    summarise(historical_average = mean(historical_average)) %>%
+    ungroup %>%
+    select(-experiment) ->
+    historical_ens
+  
+  
+  # shape and calculate changes for plotting:
+  ensemble_stats %>%
+    left_join(historical_ens, by = c('esm', 'variable', 'region')) %>%
+    left_join(esm_label_info, by = 'esm') %>%
+    mutate(change = average_2080_2099 - historical_average,
+           pct_change = 100*(average_2080_2099 - historical_average)/historical_average) ->
+    plot_tbl
+  
+return(plot_tbl)
+}
+
+prep_esm_TP_data <- function(esmname){
+  
+  region_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_tas_', esmname, '_timeseries_1980_2099.csv'),
+                              stringsAsFactors = FALSE) %>% mutate(region = acronym)
+  
+  region_tas_summary <- suppressMessages(process_time_series(time_series_df = region_timeseries, esm_label_info = esm_labels))
+  
+  region_pr_summary <- suppressMessages(process_time_series(time_series_df = 
+                                                            read.csv(paste0(timeseries_dir, 'IPCC_land_regions_pr_', esmname,'_timeseries_1980_2099.csv'),
+                                                                     stringsAsFactors = FALSE) %>%
+                                                            rename(ann_agg=pr) %>% 
+                                                            mutate(region = acronym) ,
+                                                          esm_label_info = esm_labels))
+  
+  # reshape so each row is an observation
+  # observation = esm - experiment - region - tas change-tas iasd - pr pct change
+  region_tas_summary %>% 
+    select(esm, experiment, region, iasd, change) %>%
+    rename(tas_change = change) %>%
+    left_join(region_pr_summary %>%
+                select(esm, experiment, region, pct_change) %>% 
+                rename(pr_pct = pct_change),
+              by = c('esm', 'experiment', 'region')) ->
+    region_summary
+
+return(region_summary)
+  
+}
+```
+
+
+
+# load for an ESM
+
+Consider an observation = esm - experiment - region : tas change-tas iasd - pr pct change
+
+```{r}
+
+# region_summary <- prep_esm_TP_data(esmname =  'GFDL-ESM4')
+# region_summary %>%
+#   bind_rows(prep_esm_TP_data(esmname =  'CESM2-WACCM')) %>%
+#    bind_rows(prep_esm_TP_data(esmname =  'CAMS-CSM1-0'))->
+#   region_summary_main
+# write.csv(region_summary_main, 'CAMS_GFDL_CESM2-WACCM_summaries.csv', row.names = F)
+
+region_summary_main <- read.csv('CAMS_GFDL_CESM2-WACCM_summaries.csv', stringsAsFactors = FALSE)
+# make a copy to operate on
+region_summary <- region_summary_main
+print(head(region_summary))
+
+```
+
+# Spatial info
+
+default SOM packages can only operate on numerical data, not categorical. So we have to assign some amount of spatial location numerical info to each acronym. Ideally mean lat-lon in the shape?
+
+
+Also we want the shapes for plotting anyway, so prep them
+
+```{r}
+
+library(sf)
+
+shp <- st_read(dsn = 'IPCC-WGI-reference-regions-v4_shapefile/IPCC-WGI-reference-regions-v4.shp', stringsAsFactors = F)
+
+# add a numerical region id
+shp %>% 
+  mutate(region_id = as.integer(row.names(.))) ->
+  shp
+
+# add coordinate info probably
+shp1 <-  st_transform(shp, "+proj=longlat +ellps=WGS84 +datum=WGS84")
+
+# extract
+coords <- as.data.frame(st_coordinates(shp1))
+
+
+# get a mean lon and lat value in each shape
+coords %>%
+  rename(lon = X, lat = Y, region_id = L3) %>%
+  left_join(as.data.frame(shp) %>% select(region_id, Acronym), by = 'region_id') %>%
+  filter(grepl('PO', Acronym)) %>% 
+  # have to have lon on 0:360 so th pacific ocean behaves even though not
+  # looking at that here
+  mutate(lon_360 = if_else(lon >=0, lon, lon+360))%>%
+  group_by(region_id) %>%
+  summarise(mean_lon = mean(lon_360),
+            mean_lat = mean(lat)) %>%
+  ungroup  %>%
+  mutate(mean_lon = if_else(mean_lon >= 0 & mean_lon <= 180, 
+                            mean_lon, mean_lon - 360) ) ->
+  mean_pts_PO
+
+coords %>%
+  rename(lon = X, lat = Y, region_id = L3) %>%
+  left_join(as.data.frame(shp) %>% select(region_id, Acronym), by = 'region_id') %>%
+  filter(!grepl('PO', Acronym)) %>% 
+  # have to have lon on 0:360 so th pacific ocean behaves even though not
+  # looking at that here
+  group_by(region_id) %>%
+  summarise(mean_lon = mean(lon),
+            mean_lat = mean(lat)) %>%
+  ungroup  %>% 
+  bind_rows(mean_pts_PO)->
+  mean_pts 
+
+
+```
+
+
+```{r, fig.width=14, fig.height=10}
+# Join to the shape file and make sure this very simple way of
+# doing things ends up with a lon lat that is actually in each region
+shp %>%
+  left_join(mean_pts, by = 'region_id') ->
+  shp
+
+ggplot() +
+  geom_sf(data = shp  ) +
+  geom_point(data = shp, mapping = aes(x = mean_lon, y = mean_lat), color = 'red') +
+  geom_text(data = shp, mapping = aes(label = Acronym, x = mean_lon, y= mean_lat), size =5)
+
+```
+
+
+# test - convert to rgb first
+ we have 3 variables per observarion = experimentXregion -> convert to rgb values
+ 
+ - looking across ESMs, we'll want to make sure we have them all on consistent range before converting to (0,255) 
+ - each color/family of colors does have a physical interpretation in terms of iasd, t, p
+ 
+ - red = temperature
+ - blue = precip
+ - iasd = green
+ 
+
+ 
+```{r}
+# convert to RGB
+region_summary %>%
+  filter(experiment != 'ssp119') ->
+  region_summary 
+region_summary$r <- scales::rescale(region_summary$tas_change, to =c(0,255))
+region_summary$g <- scales::rescale(region_summary$iasd, to =c(0,255))
+region_summary$b <- scales::rescale(region_summary$pr_pct, to =c(0,255))
+
+
+# add spatial numerical info
+region_summary %>%
+  left_join(as.data.frame(shp) %>% select(Acronym, mean_lon, mean_lat), by = c('region' = 'Acronym')) %>%
+  rename(lon  = mean_lon, lat = mean_lat) %>%
+  # add the original colors 
+  mutate(orig_color = rgb(.$r, .$g, .$b, maxColorValue  = 255),
+         color_order = as.integer(row.names(.))) ->
+  region_summary
+
+region_summary %>%
+  select(color_order, orig_color) %>%
+  distinct() ->
+  colors
+
+region_numerical <- as.data.frame(region_summary[c('lon', 'lat', 'r', "g", "b")])
+```
+
+
+## Plot directly
+
+- Green dominant = iasd dominates T and P
+- red dominant = T dominates iasd and P
+- blue dominant = P dominates T and IASD
+
+- black: magnitude of (r,g,b) overall small/near min value of T,P, IASD across SSPs and ESMs as set up
+- white: magnitude of (r,g,b) overall large/near max value of T,P, IASD across SSPs and ESMs as set up
+
+MAJOR downside - don't have a clear increasing vs decreasing interpretation with how it's set up. 
+
+- for temperature, smallest change is -0.03199914 deg C, so effectively only ever increasing Temp
+- IASD strictly >0
+- That leaves precip with no clear interpretable demarcation between increase and decrease; and b=127 is not the same as pr=0% change because range of values is not symmetrical about 0 in data plotting
+
+
+
+```{r}
+shp %>% 
+  left_join(region_summary, by = c('Acronym' = 'region')) %>%
+  left_join(esm_labels %>% select(esm, plotesm), by = 'esm') ->
+    shp_esms
+
+p<- ggplot() +
+    geom_sf(data = shp_esms %>% na.omit, aes(fill = as.factor(color_order)) ) +
+  scale_fill_manual(values =colors$orig_color)+
+  facet_grid(plotesm~experiment ) +
+  theme(legend.position = 'none') 
+
+ggsave('python_curation_figs/CAMS_GFDL_CESM_rawdata.png', p, width =8, units = 'in')
+p
+```
+```{r}
+# only decreasing precip
+shp_esms %>%
+  mutate(precip_change = if_else(pr_pct >=0, 'inc', 'dec'))->
+  shp_esms2
+
+
+ggplot() +
+    geom_sf(data = shp_esms2 %>% na.omit, aes(fill = as.factor(color_order), color = precip_change )) +
+  scale_fill_manual(values =colors$orig_color)+
+  scale_color_manual(values = c('red', 'blue'))+
+  facet_grid(plotesm~experiment ) +
+  theme(legend.position = 'none') 
+
+ggplot() +
+    geom_sf(data = shp_esms2 %>% na.omit, aes(color = precip_change )) +
+  scale_fill_manual(values =colors$orig_color)+
+  scale_color_manual(values = c('red', 'blue'))+
+  facet_grid(plotesm~experiment ) 
+
+
+
+ggplot() +
+    geom_sf(data = shp_esms2 %>% na.omit, aes(fill = as.factor(color_order), color = precip_change )) +
+  scale_fill_manual(values =colors$orig_color)+
+  scale_color_manual(values = c('yellow', 'blue'))+
+  facet_grid(plotesm~experiment ) +
+  theme(legend.position = 'none') 
+
+ggplot() +
+    geom_sf(data = shp_esms2 %>% na.omit, aes(color = precip_change )) +
+  scale_fill_manual(values =colors$orig_color)+
+  scale_color_manual(values = c('yellow', 'blue'))+
+  facet_grid(plotesm~experiment ) 
+
+
+
+# same thing but black is low magnitude therefore decreasing P, white is high and therefore inc P
+ggplot() +
+    geom_sf(data = shp_esms2 %>% na.omit, aes(fill = as.factor(color_order), color = precip_change )) +
+  scale_fill_manual(values =colors$orig_color)+
+  scale_color_manual(values = c('black', 'white'))+
+  facet_grid(plotesm~experiment ) +
+  theme(legend.position = 'none') 
+
+
+ggplot() +
+    geom_sf(data = shp_esms2 %>% na.omit, aes( color = precip_change )) +
+  scale_color_manual(values = c('black', 'white'))+
+  facet_grid(plotesm~experiment ) +
+  theme(legend.position = 'none') 
+```
+
+## 3d plot to get a sense of the legend
+
+```{r}
+library(plotly)
+
+fig <- plot_ly(region_summary, x = ~tas_change, y = ~iasd, z = ~pr_pct, color = ~orig_color,
+               colors = region_summary$orig_color)
+fig
+```
+
+```{r}
+
+fig <- plot_ly(region_summary %>% filter(experiment == 'ssp126'), x = ~tas_change, y = ~iasd, z = ~pr_pct, color = ~orig_color,
+               colors = (region_summary %>% filter(experiment == 'ssp126'))$orig_color)
+fig
+
+
+fig <- plot_ly(region_summary %>% filter(experiment == 'ssp245'), x = ~tas_change, y = ~iasd, z = ~pr_pct, color = ~orig_color,
+               colors = (region_summary %>% filter(experiment == 'ssp245'))$orig_color)
+fig
+
+fig <- plot_ly(region_summary %>% filter(experiment == 'ssp370'), x = ~tas_change, y = ~iasd, z = ~pr_pct, color = ~orig_color,
+               colors = (region_summary %>% filter(experiment == 'ssp370'))$orig_color)
+fig
+
+fig <- plot_ly(region_summary %>% filter(experiment == 'ssp585'), x = ~tas_change, y = ~iasd, z = ~pr_pct, color = ~orig_color,
+               colors = (region_summary %>% filter(experiment == 'ssp585'))$orig_color)
+fig
+
+
+
+```
