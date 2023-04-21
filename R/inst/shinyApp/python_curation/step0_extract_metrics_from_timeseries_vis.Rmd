@@ -1,5 +1,5 @@
 ---
-title: "som-esm2 IPCC region example - investigate grid size"
+title: "extract metrics"
 author: "ACS"
 output: 
   html_document:
@@ -32,8 +32,10 @@ library(kohonen)
 library(vegan)  # for vegdist function which gives a dissimilarity index
 
 
-
 timeseries_dir <- 'extracted_timeseries/'
+
+metrics_write_dir <-  'extracted_timeseries/extracted_metrics/'
+
 
 # get ecs ordering/labels
 esm_labels <- read.csv(paste0(timeseries_dir,'global_tas_allesms.csv'), stringsAsFactors = FALSE) %>%
@@ -41,6 +43,7 @@ esm_labels <- read.csv(paste0(timeseries_dir,'global_tas_allesms.csv'), stringsA
   mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
          ECS_order = as.integer(row.names(.)))
 print(esm_labels)
+
 
 process_time_series <- function(time_series_df, esm_label_info,
                                 hist_start = 1995, hist_end = 2014){
@@ -114,87 +117,27 @@ process_time_series <- function(time_series_df, esm_label_info,
            pct_change = 100*(average_2080_2099 - historical_average)/historical_average) ->
     plot_tbl
   
-return(plot_tbl)
-}
-
-
-process_ens_time_series <- function(time_series_df, esm_label_info,
-                                hist_start = 1995, hist_end = 2014){
-  # Get ensemble member values for projection runs:
-  # 1. 2080-2099 average
-  # 2. loess detrend each ensemble member to get IAV
-  #
-  # split by run
-  non_hist <- time_series_df %>% 
-    filter(experiment != 'historical') %>% 
-    select(year, ann_agg, esm, experiment, ensemble, variable, region)
-  
-  grouped <- split(non_hist, f = list(non_hist$esm, 
-                                      non_hist$experiment,
-                                      non_hist$ensemble, 
-                                      non_hist$variable ,
-                                      non_hist$region) )
-  # split creates group of every possible combo of the variables and fills in
-  # empty dataframes for the ones that don't exist in data. Drop those
-  grouped <- grouped[lapply(grouped, nrow)>0]
-  
-  processed_groups <- lapply(grouped, FUN = function(run_df){
-    loess_resids <- loess(run_df$ann_agg ~ run_df$year)$residuals
-    
-    run_df %>%
-      filter(year >= 2080, year <= 2099) %>%
-      group_by(esm, experiment, ensemble, variable, region) %>%
-      summarise(average_2080_2099 = mean(ann_agg)) %>% 
-      ungroup  %>%
-      mutate(iasd = sd((loess_resids))) ->
-      output_df
-    
-    return(output_df)
-    
-  })
-  
-  individual_stats <- do.call(bind_rows, processed_groups)
-  rm(non_hist)
-  rm(grouped)
-  rm(processed_groups)
-  
-  # calculate ensemble averages
-  individual_stats ->
-    ensemble_stats
-  
-  
-  # get ensemble average historical average value:
-  time_series_df %>%
-    filter(experiment == 'historical',
-           year >= hist_start,
-           year <= hist_end) %>%
-    group_by(esm, experiment, ensemble, variable, region) %>%
-    summarise(historical_average = mean(ann_agg)) %>%
-    ungroup %>%
-    group_by(esm, experiment, variable, region) %>%
-    summarise(historical_average = mean(historical_average)) %>%
-    ungroup %>%
-    select(-experiment) ->
-    historical_ens
-  
-  
-  # shape and calculate changes for plotting:
-  ensemble_stats %>%
+  # shape and calculate changes for plotting for each individ ensemble:
+  individual_stats %>%
     left_join(historical_ens, by = c('esm', 'variable', 'region')) %>%
     left_join(esm_label_info, by = 'esm') %>%
     mutate(change = average_2080_2099 - historical_average,
            pct_change = 100*(average_2080_2099 - historical_average)/historical_average) ->
-    plot_tbl
+    plot_tbl_ind
   
-return(plot_tbl)
+return(list(plot_tbl, plot_tbl_ind))
 }
 
-prep_esm_TP_data <- function(esmname){
+
+
+
+prep_esm_TP_data_ipcc <- function(esmname, metric_write_dir = metrics_write_dir){
   
   region_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_tas_', esmname, '_timeseries_1980_2099.csv'),
                               stringsAsFactors = FALSE) %>% mutate(region = acronym)
   
   region_tas_summary <- suppressMessages(process_time_series(time_series_df = region_timeseries, esm_label_info = esm_labels))
+
   
   region_pr_summary <- suppressMessages(process_time_series(time_series_df = 
                                                             read.csv(paste0(timeseries_dir, 'IPCC_land_regions_pr_', esmname,'_timeseries_1980_2099.csv'),
@@ -203,16 +146,34 @@ prep_esm_TP_data <- function(esmname){
                                                             mutate(region = acronym) ,
                                                           esm_label_info = esm_labels))
   
+  
   # reshape so each row is an observation
   # observation = esm - experiment - region - tas change-tas iasd - pr pct change
-  region_tas_summary %>% 
+  region_tas_summary[[2]] %>% 
+    select(esm, experiment, ensemble, region, iasd, change) %>%
+    rename(tas_change = change) %>%
+    left_join(region_pr_summary[[2]] %>%
+                select(esm, experiment, ensemble, region, pct_change) %>% 
+                rename(pr_pct = pct_change),
+              by = c('esm', 'experiment', 'ensemble', 'region')) ->
+    region_summary_ind
+  
+  write.csv(region_summary_ind, paste0(metric_write_dir, 'IPCC_land_regions_', esmname, '_indrun_tp_metrics.csv'), row.names = FALSE)
+
+  
+  
+  # reshape so each row is an observation
+  # observation = esm - experiment - region - tas change-tas iasd - pr pct change
+  region_tas_summary[[1]] %>% 
     select(esm, experiment, region, iasd, change) %>%
     rename(tas_change = change) %>%
-    left_join(region_pr_summary %>%
+    left_join(region_pr_summary[[1]] %>%
                 select(esm, experiment, region, pct_change) %>% 
                 rename(pr_pct = pct_change),
               by = c('esm', 'experiment', 'region')) ->
     region_summary
+  
+  write.csv(region_summary, paste0(metric_write_dir, 'IPCC_land_regions_', esmname, '_ensavg_tp_metrics.csv'), row.names = FALSE)
 
 return(region_summary)
   
@@ -225,15 +186,27 @@ return(region_summary)
 
 Consider an observation = esm - experiment - region : tas change-tas iasd - pr pct change
 
+```{r, eval=FALSE}
+
+# extract metrics for individ ensembles and ensemble averages and save as CSV 
+# for each ESM, also bind ensemble averages together into a main holder and 
+# also save that
+region_summary_main <- data.frame()
+for (esm in esm_labels$esm){
+  region_summary <- prep_esm_TP_data_ipcc(esmname=esm, metric_write_dir = metrics_write_dir)
+  
+  bind_rows(region_summary_main,
+            region_summary) ->
+    region_summary_main
+  
+  rm(region_summary)
+}
+
+write.csv(region_summary_main,paste0(metrics_write_dir, 'IPCC_land_regions_allESMs_ensavg_tp_metrics.csv'), row.names = FALSE)
+rm(region_summary_main)
+```
+
 ```{r}
-
-# region_summary <- prep_esm_TP_data(esmname =  'GFDL-ESM4')
-# region_summary %>%
-#   bind_rows(prep_esm_TP_data(esmname =  'CESM2-WACCM')) %>%
-#    bind_rows(prep_esm_TP_data(esmname =  'CAMS-CSM1-0'))->
-#   region_summary_main
-# write.csv(region_summary_main, 'CAMS_GFDL_CESM2-WACCM_summaries.csv', row.names = F)
-
 region_summary_main <- read.csv('CAMS_GFDL_CESM2-WACCM_summaries.csv', stringsAsFactors = FALSE)
 # make a copy to operate on
 region_summary <- region_summary_main
