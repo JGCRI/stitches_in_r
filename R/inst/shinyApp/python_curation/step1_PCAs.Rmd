@@ -1,0 +1,624 @@
+---
+title: "PCA analysis of extracted metrics"
+author: "ACS"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+
+# helper function to process time series 
+
+And some package and labeling info
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(factoextra) # easier visualizing outputs of prcomp
+
+
+timeseries_dir <- 'extracted_timeseries/'
+
+metrics_write_dir <-  'extracted_timeseries/extracted_metrics/'
+
+
+# get ecs ordering/labels
+esm_labels <- read.csv(paste0(timeseries_dir,'global_tas_allesms.csv'), stringsAsFactors = FALSE) %>%
+  select(esm) %>% distinct %>% 
+  mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
+         ECS_order = as.integer(row.names(.)))
+print(esm_labels)
+
+```
+
+
+
+# Spatial info
+
+we want the shapes for plotting anyway, so prep them
+
+```{r, echo=FALSE}
+
+library(sf)
+
+shp <- st_read(dsn = 'IPCC-WGI-reference-regions-v4_shapefile/IPCC-WGI-reference-regions-v4.shp', stringsAsFactors = F)
+
+# add a numerical region id
+shp %>% 
+  mutate(region_id = as.integer(row.names(.))) ->
+  shp
+
+# add coordinate info probably
+shp1 <-  st_transform(shp, "+proj=longlat +ellps=WGS84 +datum=WGS84")
+
+# extract
+coords <- as.data.frame(st_coordinates(shp1))
+
+
+# get a mean lon and lat value in each shape
+coords %>%
+  rename(lon = X, lat = Y, region_id = L3) %>%
+  left_join(as.data.frame(shp) %>% select(region_id, Acronym), by = 'region_id') %>%
+  filter(grepl('PO', Acronym)) %>% 
+  # have to have lon on 0:360 so th pacific ocean behaves even though not
+  # looking at that here
+  mutate(lon_360 = if_else(lon >=0, lon, lon+360))%>%
+  group_by(region_id) %>%
+  summarise(mean_lon = mean(lon_360),
+            mean_lat = mean(lat)) %>%
+  ungroup  %>%
+  mutate(mean_lon = if_else(mean_lon >= 0 & mean_lon <= 180, 
+                            mean_lon, mean_lon - 360) ) ->
+  mean_pts_PO
+
+coords %>%
+  rename(lon = X, lat = Y, region_id = L3) %>%
+  left_join(as.data.frame(shp) %>% select(region_id, Acronym), by = 'region_id') %>%
+  filter(!grepl('PO', Acronym)) %>% 
+  # have to have lon on 0:360 so th pacific ocean behaves even though not
+  # looking at that here
+  group_by(region_id) %>%
+  summarise(mean_lon = mean(lon),
+            mean_lat = mean(lat)) %>%
+  ungroup  %>% 
+  bind_rows(mean_pts_PO)->
+  mean_pts 
+
+
+```
+
+
+```{r, fig.width=14, fig.height=10, echo=FALSE}
+# Join to the shape file and make sure this very simple way of
+# doing things ends up with a lon lat that is actually in each region
+shp %>%
+  left_join(mean_pts, by = 'region_id') ->
+  shp
+
+ggplot() +
+  geom_sf(data = shp  ) +
+  geom_point(data = shp, mapping = aes(x = mean_lon, y = mean_lat), color = 'red') +
+  geom_text(data = shp, mapping = aes(label = Acronym, x = mean_lon, y= mean_lat), size =5)
+
+```
+
+
+# Load ESM data that's been processed
+```{r}
+region_summary_main <- read.csv(paste0(metrics_write_dir, 'IPCC_land_regions_allESMs_ensavg_tp_metrics.csv'), 
+                                stringsAsFactors = FALSE)
+region_summary_main %>%
+  filter(experiment != 'ssp119',
+         experiment != 'ssp434',
+         experiment != 'ssp460',
+         experiment != 'ssp534-over') ->
+  region_summary 
+
+print(head(region_summary))
+
+```
+# Prep data for PCA
+
+- idea is that there's something really similar across ESMs, especially for SSP126/245 -> their RGB maps have so much in common.
+
+- is there a sort of core map that gets deviations added to as you move through scenarios and ESMs? Or how many distinct maps 
+do we actually have
+
+- And the aim of the archive is to establish that our selection of ESMs forms a spanning set of vectors for all/most of CMIP6
+
+- observation = scenarioXesm
+
+- individual variable is a regionXmetric
+
+- so each observation vector is `3*Nregions` long: `<Tr1...Trn, Pr1...Prn, IASDr1...IASDrn >` for a scenarioXesm <->
+there are 48 observations for each of 129 variables
+
+-  And then becaues we're interested in a pseudo-basis for the CMIP6 archive, we want the training data to be all scenarios and ESMs
+
+- Out of sample tests -> how does basis do on overshoots that it doesn't train on; withhold one of the 12 ESMs and learn from other 11
+to see how it goes; then see how a completely external ESM does on training from all 12
+
+- nothing _a priori_ to preclude us from doing EOFs on the gridded time series data, or the gridded metrics, but having on IPCC regions 
+avoids the issue of all ESMs being on their own grids 
+
+- and overall doing region metrics helps keep data size operating on manageable
+
+
+```{r}
+# reshape:
+grouped_data <- split(region_summary, list(region_summary$esm, region_summary$experiment))
+
+shaped_data <- lapply(grouped_data, function(group){
+  
+  group %>%
+    select(esm, experiment, region, tas_change) %>%
+    mutate(metric = 'tas_change') %>%
+    rename(value = tas_change) %>% 
+    bind_rows( group %>%
+                 select(esm, experiment, region, pr_pct) %>%
+                 mutate(metric = 'pr_pct') %>%
+                 rename(value = pr_pct),
+               group %>%
+                 select(esm, experiment, region, iasd) %>%
+                 mutate(metric = 'iasd') %>%
+                 rename(value = iasd)
+               ) ->
+    reshaped
+  
+  reshaped %>%
+    mutate(row_id = paste0(region, '~', metric),
+           col_id = paste0(esm, '~', experiment)) %>%
+    select(-esm, -experiment, -region, -metric)->
+    reshaped2 
+  
+  colnames(reshaped2) <- c(paste0(unique(reshaped2$col_id)), 'row_id', 'col_id')
+  rownames(reshaped2) <- paste0(reshaped2$row_id)
+  
+  reshaped2 %>% 
+    select(-col_id, -row_id) ->
+    out
+  
+  return(out)
+  
+  }
+)
+
+# combine columns but then transpose because prcomp wants rows to be observations 
+# and columns to be variables (but doing it the other way first is easier to code)
+data <- t(do.call(cbind, shaped_data) )
+
+print(head(data))
+```
+
+
+# do PCA
+
+```{r}
+
+data_pca <- prcomp(data, center=TRUE, scale = TRUE)
+
+# quick visualize
+factoextra::fviz_eig(data_pca)
+```
+
+## further visualization 
+
+with `factoextra` functions
+
+### Graph of individuals.
+
+Individuals with a similar profile are grouped together.
+
+
+```{r}
+
+# Control automatically the color of individuals
+# using the cos2 or the contributions
+# cos2 = the quality of the individuals on the factor map
+options(ggrepel.max.overlaps = Inf)
+factoextra::fviz_pca_ind(data_pca,
+                         repel=TRUE,
+                         col.ind="cos2",
+                          gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+                         alpha.ind = 'contrib')
+```
+### Graph of variables. 
+
+Positive correlated variables point to the same side of the plot. Negative correlated variables point to opposite sides of the graph.
+```{r}
+
+fviz_pca_var(data_pca,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+```
+
+## plot as map
+
+
+```{r}
+pcs <- data_pca$rotation
+
+str(pcs) 
+
+
+# pull the region and metric info back in
+as.data.frame(pcs) %>%
+  mutate(row_id = row.names(.)) %>%
+  separate(row_id, into = c('region', 'metric'), sep ='~') ->
+  tmp
+
+
+# We want to convert each set of 3 metrics in a region to a single
+# rgb coded value.
+# and we want all on same color scale. 
+
+# so reshape for each metric (which goes to one of r, g, b)
+# with all PCs want to consider stacked.
+tmp %>%
+  filter(metric == 'tas_change') %>%
+  select(region, metric, PC1) %>%
+  rename(tas_change = PC1) %>%
+  mutate(pc = 'PC1') %>%
+    bind_rows(tmp %>%
+                filter(metric == 'tas_change') %>%
+                select(region, metric, PC2) %>%
+                rename(tas_change = PC2) %>% 
+                mutate(pc = 'PC2'), 
+              tmp %>%
+                filter(metric == 'tas_change') %>%
+                select(region, metric, PC3) %>%
+                rename(tas_change = PC3) %>% 
+                mutate(pc = 'PC3') ,
+              tmp %>%
+                filter(metric == 'tas_change') %>%
+                select(region, metric, PC4) %>%
+                rename(tas_change = PC4) %>% 
+                mutate(pc = 'PC4'),
+              tmp %>%
+                filter(metric == 'tas_change') %>%
+                select(region, metric, PC5) %>%
+                rename(tas_change = PC5) %>% 
+                mutate(pc = 'PC5'),
+              tmp %>%
+                filter(metric == 'tas_change') %>%
+                select(region, metric, PC6) %>%
+                rename(tas_change = PC6) %>% 
+                mutate(pc = 'PC6'),
+              tmp %>%
+                filter(metric == 'tas_change') %>%
+                select(region, metric, PC7) %>%
+                rename(tas_change = PC7) %>% 
+                mutate(pc = 'PC7'),
+              tmp %>%
+                filter(metric == 'tas_change') %>%
+                select(region, metric, PC8) %>%
+                rename(tas_change = PC8) %>% 
+                mutate(pc = 'PC8'),
+              tmp %>%
+                filter(metric == 'tas_change') %>%
+                select(region, metric, PC9) %>%
+                rename(tas_change = PC9) %>% 
+                mutate(pc = 'PC9'),
+              tmp %>%
+                filter(metric == 'tas_change') %>%
+                select(region, metric, PC10) %>%
+                rename(tas_change = PC10) %>% 
+                mutate(pc = 'PC10')
+              ) ->
+  tas
+print(head(tas))
+print(tail(tas))
+
+
+tmp %>%
+  filter(metric == 'pr_pct') %>%
+  select(region, metric, PC1) %>%
+  rename(pr_pct = PC1) %>%
+  mutate(pc = 'PC1') %>%
+  bind_rows(tmp %>%
+              filter(metric == 'pr_pct') %>%
+              select(region, metric, PC2) %>%
+              rename(pr_pct = PC2) %>%
+              mutate(pc = 'PC2'), 
+            tmp %>%
+              filter(metric == 'pr_pct') %>%
+              select(region, metric, PC3) %>%
+              rename(pr_pct = PC3) %>%
+              mutate(pc = 'PC3') ,
+            tmp %>%
+              filter(metric == 'pr_pct') %>%
+              select(region, metric, PC4) %>%
+              rename(pr_pct = PC4) %>%
+              mutate(pc = 'PC4') ,
+            tmp %>%
+              filter(metric == 'pr_pct') %>%
+              select(region, metric, PC5) %>%
+              rename(pr_pct = PC5) %>%
+              mutate(pc = 'PC5') ,
+            tmp %>%
+              filter(metric == 'pr_pct') %>%
+              select(region, metric, PC6) %>%
+              rename(pr_pct = PC6) %>%
+              mutate(pc = 'PC6') ,
+            tmp %>%
+              filter(metric == 'pr_pct') %>%
+              select(region, metric, PC7) %>%
+              rename(pr_pct = PC7) %>%
+              mutate(pc = 'PC7') ,
+            tmp %>%
+              filter(metric == 'pr_pct') %>%
+              select(region, metric, PC8) %>%
+              rename(pr_pct = PC8) %>%
+              mutate(pc = 'PC8') ,
+            tmp %>%
+              filter(metric == 'pr_pct') %>%
+              select(region, metric, PC9) %>%
+              rename(pr_pct = PC9) %>%
+              mutate(pc = 'PC9') ,
+            tmp %>%
+              filter(metric == 'pr_pct') %>%
+              select(region, metric, PC10) %>%
+              rename(pr_pct = PC10) %>%
+              mutate(pc = 'PC10') 
+              ) ->
+  pr
+
+
+tmp %>%
+  filter(metric == 'iasd') %>%
+  select(region, metric, PC1) %>%
+  rename(iasd = PC1) %>%
+  mutate(pc = 'PC1') %>%
+  bind_rows(tmp %>%
+              filter(metric == 'iasd') %>%
+              select(region, metric, PC2) %>%
+              rename(iasd = PC2) %>%
+              mutate(pc = 'PC2'), 
+            tmp %>%
+              filter(metric == 'iasd') %>%
+              select(region, metric, PC3) %>%
+              rename(iasd = PC3) %>%
+              mutate(pc = 'PC3') ,
+            tmp %>%
+              filter(metric == 'iasd') %>%
+              select(region, metric, PC4) %>%
+              rename(iasd = PC4) %>%
+              mutate(pc = 'PC4') ,
+            tmp %>%
+              filter(metric == 'iasd') %>%
+              select(region, metric, PC5) %>%
+              rename(iasd = PC5) %>%
+              mutate(pc = 'PC5'), 
+            tmp %>%
+              filter(metric == 'iasd') %>%
+              select(region, metric, PC6) %>%
+              rename(iasd = PC6) %>%
+              mutate(pc = 'PC6'), 
+            tmp %>%
+              filter(metric == 'iasd') %>%
+              select(region, metric, PC6) %>%
+              rename(iasd = PC6) %>%
+              mutate(pc = 'PC6'), 
+            tmp %>%
+              filter(metric == 'iasd') %>%
+              select(region, metric, PC7) %>%
+              rename(iasd = PC7) %>%
+              mutate(pc = 'PC7'), 
+            tmp %>%
+              filter(metric == 'iasd') %>%
+              select(region, metric, PC8) %>%
+              rename(iasd = PC8) %>%
+              mutate(pc = 'PC8'), 
+            tmp %>%
+              filter(metric == 'iasd') %>%
+              select(region, metric, PC9) %>%
+              rename(iasd = PC9) %>%
+              mutate(pc = 'PC9'), 
+            tmp %>%
+              filter(metric == 'iasd') %>%
+              select(region, metric, PC10) %>%
+              rename(iasd = PC10) %>%
+              mutate(pc = 'PC10')
+              ) ->
+iasd
+
+
+tas %>%
+  select(-metric) %>%
+  left_join(pr %>% select(-metric), by =c('region', 'pc')) %>%
+  left_join(iasd %>% select(-metric), by =c('region', 'pc')) ->
+  colored_pcs
+
+
+colored_pcs$r <- scales::rescale(colored_pcs$tas_change, to =c(0,255))
+colored_pcs$g <- scales::rescale(colored_pcs$iasd, to =c(0,255))
+colored_pcs$b <- scales::rescale(colored_pcs$pr_pct, to =c(0,255))
+  
+colored_pcs %>%
+  left_join(as.data.frame(shp) %>% select(Acronym, mean_lon, mean_lat), by = c('region' = 'Acronym')) %>%
+  rename(lon  = mean_lon, lat = mean_lat) %>%
+  mutate(color = rgb(.$r, .$g, .$b, maxColorValue  = 255),
+         color_order = as.integer(row.names(.))) ->
+  pc_plotting
+
+pc_plotting %>%
+  select(color_order, color) %>%
+  distinct() ->
+  colors
+
+shp %>% 
+  left_join(pc_plotting, by = c('Acronym' = 'region'))->
+  shp_pcs
+
+p<- ggplot() +
+  geom_sf(data = shp_pcs %>% filter(pc != 'PC10') %>% na.omit, aes(fill = as.factor(color_order)) ) +
+  scale_fill_manual(values =colors$color)+
+  facet_wrap(~pc, ncol=3) +
+  theme(legend.position = 'none') 
+p
+
+```
+
+```{r}
+#look at whether Precip inc or dec -> not just the PCs' precip entries >= 0
+# because standardized/
+
+as.data.frame(data_pca$center) %>%
+  mutate(row_id = row.names(.)) %>%
+  filter(grepl('pr_pct', row_id)) %>%
+  separate(row_id, into  = c('region', 'trash'), sep = '~') %>%
+  select(-trash) ->
+  pr_centers
+
+as.data.frame(data_pca$scale) %>%
+  mutate(row_id = row.names(.)) %>%
+  filter(grepl('pr_pct', row_id)) %>%
+  separate(row_id, into  = c('region', 'trash'), sep = '~') %>%
+  select(-trash) ->
+  pr_scales
+
+
+
+
+shp_pcs %>%
+  left_join(pr_centers, by = c('Acronym'='region')) %>%
+  left_join(pr_scales, by = c('Acronym'='region')) %>%
+  mutate(precip_change = if_else( ((pr_pct*`data_pca$scale`)- `data_pca$center`) >=0, 'inc', 'dec'))->
+  shp_pcs2
+
+
+ggplot() +
+    geom_sf(data = shp_pcs2 %>% filter(pc != 'PC10') %>% na.omit, aes(#fill = as.factor(color_order),
+                                             color = precip_change )) +
+  #scale_fill_manual(values =colors$orig_color)+
+  scale_color_manual(values = c('red', 'blue'))+
+  facet_wrap(~pc, ncol=3) +
+  theme(legend.position = 'none') 
+  
+```
+# predict
+
+Is this set of 12 ESMs and 4 scenarios a spanning set - can I use the basis estimated from these 48 observations to do a credible job producing the metrics for an out of sample  ESM or Scenario?
+
+## withheld experiments - ssp460
+
+```{r}
+# pull off and reshape the ssp460 data
+region_summary_main %>%
+  filter(experiment == 'ssp460') ->
+  region_460
+
+# reshape:
+grouped_data <- split(region_460, list(region_460$esm, region_460$experiment))
+
+shaped_data <- lapply(grouped_data, function(group){
+  
+  group %>%
+    select(esm, experiment, region, tas_change) %>%
+    mutate(metric = 'tas_change') %>%
+    rename(value = tas_change) %>% 
+    bind_rows( group %>%
+                 select(esm, experiment, region, pr_pct) %>%
+                 mutate(metric = 'pr_pct') %>%
+                 rename(value = pr_pct),
+               group %>%
+                 select(esm, experiment, region, iasd) %>%
+                 mutate(metric = 'iasd') %>%
+                 rename(value = iasd)
+               ) ->
+    reshaped
+  
+  reshaped %>%
+    mutate(row_id = paste0(region, '~', metric),
+           col_id = paste0(esm, '~', experiment)) %>%
+    select(-esm, -experiment, -region, -metric)->
+    reshaped2 
+  
+  colnames(reshaped2) <- c(paste0(unique(reshaped2$col_id)), 'row_id', 'col_id')
+  rownames(reshaped2) <- paste0(reshaped2$row_id)
+  
+  reshaped2 %>% 
+    select(-col_id, -row_id) ->
+    out
+  
+  return(out)
+  
+  }
+)
+
+# combine columns but then transpose because prcomp wants rows to be observations 
+# and columns to be variables (but doing it the other way first is easier to code)
+data_460 <- t(do.call(cbind, shaped_data) )
+
+print(head(data_460))
+
+
+data_460_coords <- predict(data_pca, newdata = data_460)
+
+print(head(data_460_coords))
+```
+
+```{r}
+
+
+# Plot of active individuals
+p <- fviz_pca_ind(data_pca, repel = TRUE)
+# Add supplementary individuals
+fviz_add(p, data_460_coords, color ="blue")
+
+```
+
+-> MIROC6 and Fgoals starting to get out of the cloud 
+
+- compare the 'true' data with projected data?
+
+```{r}
+recons_460 <- data_460_coords %*% t(pcs)
+
+as.data.frame(recons_460) %>%
+  mutate(row_id = row.names(.)) %>%
+  separate(row_id, c('esm', 'experiment'), sep = '~') %>%
+  gather(rgn_metric, recons_value, - esm, -experiment) %>%
+  separate(rgn_metric, c('region', 'metric'), sep = '~')  %>%
+  # add the center and scale info, then de-standardize 
+  ->
+  shaped_recons_460
+
+as.data.frame(data_460) %>%
+  mutate(row_id = row.names(.)) %>%
+  separate(row_id, c('esm', 'experiment'), sep = '~') %>%
+  gather(rgn_metric, value, - esm, -experiment) %>%
+  separate(rgn_metric, c('region', 'metric'), sep = '~') %>%
+  left_join(shaped_recons_460, by = c('esm', 'experiment', 'region', 'metric')) ->
+ comparison
+
+
+```
+
+
+SO these are good so it would be a question of applying basis vectors to each ESM in CMIP6 (maybe just with >= 3 or 5 realizations to save)
+and make sure those are all within the cloud of training data as above
+
+## withold an ESM and test:
+
+- make reshaping a function
+- reshape just like first 4 ESMs 
+- predict others
+
+```{r}
+
+
+```
+
+
+# Other ideas 
+
+- 4 PCs for each ESM and compare those? hard to visualize at that point though
+
+
+- compute basis with all esm data and find invariant subspaces?

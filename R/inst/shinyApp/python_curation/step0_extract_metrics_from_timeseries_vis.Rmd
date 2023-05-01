@@ -8,17 +8,6 @@ output:
     toc_float: true
 ---
 
-# Notes 
-
-Ok we've looked at a lot, maybe streamline to investigate grid size and whether a different grid size can make things more robust
-
-- we did 8x8 so we can go smaller or larger
-- 5x5, 6x6, 10x10 
-
- - could do ensemble members instead of ensemble averages
- 
- - maybe we don't do the som at all, maybe we just plot a 4 panel map for each ESM with the color coming from T, P, iasd. The color is _sort of_ interpretable, especially  with all of the same ESMs on the same color wheel
- 
 
 # helper function to process time series 
 
@@ -28,8 +17,6 @@ And some package and labeling info
 library(ggplot2)
 library(dplyr)
 library(tidyr)
-library(kohonen)
-library(vegan)  # for vegdist function which gives a dissimilarity index
 
 
 timeseries_dir <- 'extracted_timeseries/'
@@ -182,7 +169,7 @@ return(region_summary)
 
 
 
-# load for an ESM
+# Process and save all ESMs
 
 Consider an observation = esm - experiment - region : tas change-tas iasd - pr pct change
 
@@ -205,9 +192,10 @@ for (esm in esm_labels$esm){
 write.csv(region_summary_main,paste0(metrics_write_dir, 'IPCC_land_regions_allESMs_ensavg_tp_metrics.csv'), row.names = FALSE)
 rm(region_summary_main)
 ```
-
+# Load ESM data that's been processed
 ```{r}
-region_summary_main <- read.csv('CAMS_GFDL_CESM2-WACCM_summaries.csv', stringsAsFactors = FALSE)
+region_summary_main <- read.csv(paste0(metrics_write_dir, 'IPCC_land_regions_allESMs_ensavg_tp_metrics.csv'), 
+                                stringsAsFactors = FALSE)
 # make a copy to operate on
 region_summary <- region_summary_main
 print(head(region_summary))
@@ -216,10 +204,7 @@ print(head(region_summary))
 
 # Spatial info
 
-default SOM packages can only operate on numerical data, not categorical. So we have to assign some amount of spatial location numerical info to each acronym. Ideally mean lat-lon in the shape?
-
-
-Also we want the shapes for plotting anyway, so prep them
+we want the shapes for plotting anyway, so prep them
 
 ```{r}
 
@@ -287,7 +272,7 @@ ggplot() +
 ```
 
 
-# test - convert to rgb first
+# Convert ESM metrics to RGB and plot
  we have 3 variables per observarion = experimentXregion -> convert to rgb values
  
  - looking across ESMs, we'll want to make sure we have them all on consistent range before converting to (0,255) 
@@ -302,7 +287,10 @@ ggplot() +
 ```{r}
 # convert to RGB
 region_summary %>%
-  filter(experiment != 'ssp119') ->
+  filter(experiment != 'ssp119',
+         experiment != 'ssp434',
+         experiment != 'ssp460',
+         experiment != 'ssp534-over') ->
   region_summary 
 region_summary$r <- scales::rescale(region_summary$tas_change, to =c(0,255))
 region_summary$g <- scales::rescale(region_summary$iasd, to =c(0,255))
@@ -344,7 +332,7 @@ MAJOR downside - don't have a clear increasing vs decreasing interpretation with
 
 
 
-```{r}
+```{r, fig.height=14}
 shp %>% 
   left_join(region_summary, by = c('Acronym' = 'region')) %>%
   left_join(esm_labels %>% select(esm, plotesm), by = 'esm') ->
@@ -356,10 +344,11 @@ p<- ggplot() +
   facet_grid(plotesm~experiment ) +
   theme(legend.position = 'none') 
 
-ggsave('python_curation_figs/CAMS_GFDL_CESM_rawdata.png', p, width =8, units = 'in')
+ggsave('python_curation_figs/allESMs_rawdata.png', p, height =14, units = 'in')
 p
 ```
-```{r}
+
+```{r, fig.height=14}
 # only decreasing precip
 shp_esms %>%
   mutate(precip_change = if_else(pr_pct >=0, 'inc', 'dec'))->
@@ -444,3 +433,6 @@ fig
 
 
 ```
+
+
+# Notes/considerations
