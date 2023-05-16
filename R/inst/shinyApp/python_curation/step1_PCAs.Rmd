@@ -507,7 +507,7 @@ Is this set of 12 ESMs and 4 scenarios a spanning set - can I use the basis esti
 
 ## withheld experiments - ssp460
 
-```{r}
+```{r, eval = FALSE}
 # pull off and reshape the ssp460 data
 region_summary_main %>%
   filter(experiment == 'ssp460') ->
@@ -563,7 +563,7 @@ data_460_coords <- predict(data_pca, newdata = data_460)
 print(head(data_460_coords))
 ```
 
-```{r}
+```{r, eval = FALSE}
 
 
 # Plot of active individuals
@@ -577,7 +577,7 @@ fviz_add(p, data_460_coords, color ="blue")
 
 - compare the 'true' data with projected data?
 
-```{r}
+```{r,eval=FALSE}
 recons_460 <- data_460_coords %*% t(pcs)
 
 as.data.frame(recons_460) %>%
