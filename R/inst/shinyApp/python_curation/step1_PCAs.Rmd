@@ -245,6 +245,7 @@ ggplot(coordinates) +
 ggplot(coordinates) +
   geom_point(mapping = aes(x = PC1, y = PC4, color = scenario))
 ```
+
 ## PC2 vs PC3
 
 ```{r}
@@ -277,7 +278,7 @@ ggplot(coordinates) +
 ```
 
 
-## plot as map
+## plot PCs as maps
 
 
 ```{r}
@@ -541,6 +542,8 @@ ggplot() +
   theme(legend.position = 'none') 
   
 ```
+
+
 # predict
 
 Is this set of 12 ESMs and 4 scenarios a spanning set - can I use the basis estimated from these 48 observations to do a credible job producing the metrics for an out of sample  ESM or Scenario?
@@ -550,7 +553,7 @@ Is this set of 12 ESMs and 4 scenarios a spanning set - can I use the basis esti
 ```{r, eval = FALSE}
 # pull off and reshape the ssp460 data
 region_summary_main %>%
-  filter(experiment == 'ssp460') ->
+  filter(experiment == 'ssp460' ) ->
   region_460
 
 # reshape:
@@ -601,60 +604,293 @@ print(head(data_460))
 data_460_coords <- predict(data_pca, newdata = data_460)
 
 print(head(data_460_coords))
-```
-
-```{r, eval = FALSE}
 
 
-# Plot of active individuals
-p <- fviz_pca_ind(data_pca, repel = TRUE)
-# Add supplementary individuals
-fviz_add(p, data_460_coords, color ="blue")
-
-```
-
--> MIROC6 and Fgoals starting to get out of the cloud 
-
-- compare the 'true' data with projected data?
-
-```{r,eval=FALSE}
-recons_460 <- data_460_coords %*% t(pcs)
-
-as.data.frame(recons_460) %>%
-  mutate(row_id = row.names(.)) %>%
-  separate(row_id, c('esm', 'experiment'), sep = '~') %>%
-  gather(rgn_metric, recons_value, - esm, -experiment) %>%
-  separate(rgn_metric, c('region', 'metric'), sep = '~')  %>%
-  # add the center and scale info, then de-standardize 
-  ->
-  shaped_recons_460
-
-as.data.frame(data_460) %>%
-  mutate(row_id = row.names(.)) %>%
-  separate(row_id, c('esm', 'experiment'), sep = '~') %>%
-  gather(rgn_metric, value, - esm, -experiment) %>%
-  separate(rgn_metric, c('region', 'metric'), sep = '~') %>%
-  left_join(shaped_recons_460, by = c('esm', 'experiment', 'region', 'metric')) ->
- comparison
-
+data_460_coords %>%
+  as.data.frame() %>%
+  mutate(id = row.names(.)) %>%
+  separate(id, into=c('model', 'scenario'), sep = '~') %>%
+  select(model, scenario, PC1, PC2, PC3, PC4, PC5, PC6, PC7, PC8, PC9) %>%
+  bind_rows(coordinates) ->
+  coordinates
 
 ```
 
 
-SO these are good so it would be a question of applying basis vectors to each ESM in CMIP6 (maybe just with >= 3 or 5 realizations to save)
-and make sure those are all within the cloud of training data as above
+## PC1 vs PC2
 
-## withold an ESM and test:
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC1, y = PC2, color = model), shape = 9, size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC1, y = PC2, color = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC1, y = PC2), color = 'black', shape = 9, size =3.5)
+
+```
+
+## PC1 vs PC3
+
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC1, y = PC3, color = model), shape = 9, size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC1, y = PC3, color = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC1, y = PC3), color = 'black', shape = 9, size =3.5)
+```
+
+## PC1 vs PC4
+
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC1, y = PC4, color = model, shape = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC1, y = PC4, color = model), shape = 9, size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC1, y = PC4, color = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC1, y = PC4), color = 'black', shape = 9, size =3.5)
+```
+
+## PC2 vs PC3
+
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC2, y = PC3, color = model, shape = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC2, y = PC3, color = model), shape = 9, size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC2, y = PC3, color = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC2, y = PC3), color = 'black', shape = 9, size =3.5)
+```
+
+## PC2 vs PC4
+
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC2, y = PC4, color = model, shape = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC2, y = PC4, color = model), shape = 9, size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC2, y = PC4, color = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC2, y = PC4), color = 'black', shape = 9, size =3.5)
+```
+
+
+## PC3 vs PC4
+
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC3, y = PC4, color = model, shape = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC3, y = PC4, color = model), shape = 9, size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(scenario !='ssp460'),
+             mapping = aes(x = PC3, y = PC4, color = scenario)) +
+  geom_point(data = coordinates %>% filter(scenario =='ssp460'), 
+             mapping = aes(x = PC3, y = PC4), color = 'black', shape = 9, size =3.5)
+```
+
+
+
+ 
+## witheld ESMs:
 
 - make reshaping a function
 - reshape just like first 4 ESMs 
 - predict others
 
 ```{r}
+region_summary_main <- read.csv(paste0(metrics_write_dir, 'IPCC_land_regions_oosESMs_ensavg_tp_metrics.csv'), 
+                                stringsAsFactors = FALSE)
+region_summary_main %>%
+  filter(experiment != 'ssp119',
+         experiment != 'ssp434',
+         experiment != 'ssp460',
+         experiment != 'ssp534-over') ->
+  region_summary 
 
+
+# reshape:
+grouped_data <- split(region_summary, list(region_summary$esm, region_summary$experiment))
+
+shaped_data <- lapply(grouped_data, function(group){
+  
+  group %>%
+    select(esm, experiment, region, tas_change) %>%
+    mutate(metric = 'tas_change') %>%
+    rename(value = tas_change) %>% 
+    bind_rows( group %>%
+                 select(esm, experiment, region, pr_pct) %>%
+                 mutate(metric = 'pr_pct') %>%
+                 rename(value = pr_pct),
+               group %>%
+                 select(esm, experiment, region, iasd) %>%
+                 mutate(metric = 'iasd') %>%
+                 rename(value = iasd)
+               ) ->
+    reshaped
+  
+  reshaped %>%
+    mutate(row_id = paste0(region, '~', metric),
+           col_id = paste0(esm, '~', experiment)) %>%
+    select(-esm, -experiment, -region, -metric)->
+    reshaped2 
+  
+  colnames(reshaped2) <- c(paste0(unique(reshaped2$col_id)), 'row_id', 'col_id')
+  rownames(reshaped2) <- paste0(reshaped2$row_id)
+  
+  reshaped2 %>% 
+    select(-col_id, -row_id) ->
+    out
+  
+  return(out)
+  
+  }
+)
+
+# combine columns but then transpose because prcomp wants rows to be observations 
+# and columns to be variables (but doing it the other way first is easier to code)
+data_oos <- t(do.call(cbind, shaped_data) )
+
+print(head(data_oos))
+
+
+data_oos_coords <- predict(data_pca, newdata = data_oos)
+
+print(head(data_oos_coords))
+
+
+data_oos_coords %>%
+  as.data.frame() %>%
+  mutate(id = row.names(.)) %>%
+  separate(id, into=c('model', 'scenario'), sep = '~') %>%
+  select(model, scenario, PC1, PC2, PC3, PC4, PC5, PC6, PC7, PC8, PC9) %>%
+  mutate(label = 'oos') %>%
+  bind_rows(coordinates %>% mutate(label = 'training')) ->
+  coordinates
+```
+## PC1 vs PC2
+
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC1, y = PC2, color = model), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),  size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC1, y = PC2, color = scenario), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC1, y = PC2, color = scenario),  size =3.5)
 
 ```
 
+## PC1 vs PC3
+
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC1, y = PC3, color = model), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),  size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC1, y = PC3, color = scenario), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC1, y = PC3, color = scenario),  size =3.5)
+```
+
+## PC1 vs PC4
+
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC1, y = PC4, color = model), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC1, y = PC4, color = model, shape = scenario),  size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC1, y = PC4, color = scenario), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC1, y = PC4, color = scenario),  size =3.5)
+```
+
+## PC2 vs PC3
+
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC2, y = PC3, color = model), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC2, y = PC3, color = model, shape = scenario),  size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC2, y = PC3, color = scenario), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC2, y = PC3, color = scenario),  size =3.5)
+```
+
+## PC2 vs PC4
+
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC2, y = PC4, color = model), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC2, y = PC4, color = model, shape = scenario),  size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC2, y = PC4, color = scenario), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC2, y = PC4, color = scenario),  size =3.5)
+```
+
+
+## PC3 vs PC4
+
+```{r}
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC3, y = PC4, color = model), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC3, y = PC4, color = model, shape = scenario),  size =3.5)
+
+ggplot() +
+  geom_point(data = coordinates %>% filter(label !='oos'),
+             mapping = aes(x = PC3, y = PC4, color = scenario), alpha = 0.5) +
+  geom_point(data = coordinates %>% filter(label =='oos'), 
+             mapping = aes(x = PC3, y = PC4, color = scenario),  size =3.5)
+```
 
 # Other ideas 
 
