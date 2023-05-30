@@ -1,5 +1,8 @@
 import stitches
 
+from dask.distributed import Client, LocalCluster
+import dask
+
 import pandas as pd
 import pkg_resources
 import xarray as xr
@@ -48,8 +51,8 @@ if __name__ == "__main__":
     pangeo_data = stitches.fx_pangeo.fetch_pangeo_table()
 
     # Extracting just the desired models, variables, scenarios we want
-    pangeo_data = pangeo_data[(pangeo_data['source_id'].isin(esm)) &
-                            (pangeo_data['variable_id'].isin(vars1)) &
+    pangeo_data = pangeo_data[(pangeo_data['source_id'].isin(esms)) &
+                            (pangeo_data['variable_id'].isin(vars)) &
                             (pangeo_data['table_id'] == 'Amon') &
                             (pangeo_data['experiment_id'].isin(exps))].copy()
 
@@ -87,7 +90,7 @@ if __name__ == "__main__":
     # Helper functions
 
     # Get template output
-    def get_template_arr(full_arr: xr.DataArray):
+    def get_template_arr(full_arr: xr.DataArray, variable: str):
         """
         Returns a xarray in with the same coords, dims and chunks as the output from the map_blocks function
         in conjunction with `annual_area_weighted_mean`. This is done so that Dask can pre-specify the
@@ -99,7 +102,7 @@ if __name__ == "__main__":
             An empty xarray of the form of the output of `map_blocks`
         """
         # Get example of the output after doing the coarsening and getting annual values
-        template = full_arr[dict(region=1)].mean(("lon", "lat")).coarsen(time=12).mean()['pr'].chunk({'time': -1})
+        template = full_arr[dict(region=1)].mean(("lon", "lat")).coarsen(time=12).mean()[variable].chunk({'time': -1})
 
         # Particularly need the time array, and we know there are 43 regions 0-43
         # Also want one chunk per region as is input to the map_blocks func
@@ -170,6 +173,13 @@ if __name__ == "__main__":
         region_masks = regionmask.mask_3D_geopandas(aois, matched_data.lon, matched_data.lat)
         matched_data = matched_data.where(region_masks).copy()
 
+        # Remove random extra height coordinate in some datasets which does nothing
+        try:    
+            matched_data = matched_data.drop_vars('height')
+        except:
+            pass
+        matched_data
+
         # If the experiment is historical, further slice to reference years.
         # Otherwise, slice to comparison years:
         # What is with this UKESM1-0-LL ESM?
@@ -198,10 +208,10 @@ if __name__ == "__main__":
             matched_data = matched_data.persist().chunk({'lon': -1, 'lat': -1, 'time': -1, 'region': 1}).copy()
 
             # Template for map_blocks
-            template = get_template_arr(matched_data)
+            template = get_template_arr(matched_data, variable)
 
             # For each region (which is a single chunk), get the annual mean values (weighted by area) for each year
-            mean_by_year_region_arr = xr.map_blocks(annual_area_weighted_mean, matched_data, kwargs={'variable_name': 'pr'}, template = template)
+            mean_by_year_region_arr = xr.map_blocks(annual_area_weighted_mean, matched_data, kwargs={'variable_name': variable}, template = template)
             mean_by_year_region_arr.compute()
 
             # Format resulting data
@@ -209,6 +219,8 @@ if __name__ == "__main__":
 
         matched_data.close()
         del matched_data
+
+        mean_by_year_region_df = mean_by_year_region_df.rename(columns={variable: 'value'})
 
         return mean_by_year_region_df
 
