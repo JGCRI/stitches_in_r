@@ -1,5 +1,7 @@
 import stitches
 
+import sys
+
 from dask.distributed import Client, LocalCluster
 import dask
 
@@ -19,6 +21,9 @@ if __name__ == "__main__":
 
     warnings.filterwarnings("ignore")
 
+    # Task index from SLURM array to run specific model
+    task_id = int(sys.argv[1])
+
     # Time slices
     ref_start = 1980
     ref_end =  2014
@@ -32,11 +37,85 @@ if __name__ == "__main__":
 
     # Lists of models, variables and experiments to extract
     # Models
-    esms = ['CAMS-CSM1-0', 'MIROC6', 'GFDL-ESM4', 'FGOALS-g3',
-    'MPI-ESM1-2-HR', 'MPI-ESM1-2-LR', 'MRI-ESM2-0',
-    'ACCESS-ESM1-5', 'IPSL-CM6A-LR', 'CESM2-WACCM',
-    'UKESM1-0-LL',
-    'CanESM5']
+    esms = ['ACCESS-CM2',
+       'AWI-CM-1-1-MR',
+       'AWI-ESM-1-1-LR',
+       'BCC-CSM2-HR',
+       'BCC-CSM2-MR',
+       'BCC-ESM1',
+       'CESM1-1-CAM5-CMIP5',
+       'CESM1-WACCM-SC',
+       'CESM2',
+       'CESM2-FV2',
+       'CESM2-WACCM-FV2',
+       'CIESM',
+       'CMCC-CM2-HR4',
+       'CMCC-CM2-SR5',
+       'CMCC-CM2-VHR4',
+       'CMCC-ESM2',
+       'CNRM-CM6-1',
+       'CNRM-CM6-1-HR',
+       'CNRM-ESM2-1',
+       'CanESM5-CanOE',
+       'E3SM-1-0',
+       'E3SM-1-1',
+       'E3SM-1-1-ECA',
+       'EC-Earth3',
+       'EC-Earth3-AerChem',
+       'EC-Earth3-CC',
+       'EC-Earth3-LR',
+       'EC-Earth3-Veg',
+       'EC-Earth3-Veg-LR',
+       'EC-Earth3P',
+       'EC-Earth3P-HR',
+       'EC-Earth3P-VHR',
+       'ECMWF-IFS-HR',
+       'ECMWF-IFS-LR',
+       'FGOALS-f3-H',
+       'FGOALS-f3-L',
+       'FIO-ESM-2-0',
+       'GFDL-AM4',
+       'GFDL-CM4',
+       'GFDL-CM4C192',
+       'GFDL-ESM2M',
+       'GFDL-OM4p5B',
+       'GISS-E2-1-G',
+       'GISS-E2-1-G-CC',
+       'GISS-E2-1-H',
+       'GISS-E2-2-G',
+       'GISS-E2-2-H',
+       'HadGEM3-GC31-HM',
+       'HadGEM3-GC31-LL',
+       'HadGEM3-GC31-LM',
+       'HadGEM3-GC31-MM',
+       'ICON-ESM-LR',
+       'IITM-ESM',
+       'INM-CM4-8',
+       'INM-CM5-0',
+       'INM-CM5-H',
+       'IPSL-CM5A2-INCA',
+       'IPSL-CM6A-ATM-HR',
+       'IPSL-CM6A-LR-INCA',
+       'KACE-1-0-G',
+       'KIOST-ESM',
+       'MCM-UA-1-0',
+       'MIROC-ES2H',
+       'MIROC-ES2L',
+       'MPI-ESM-1-2-HAM',
+       'MPI-ESM1-2-XR',
+       'MRI-AGCM3-2-H',
+       'MRI-AGCM3-2-S',
+       'MRI-ESM2-0',
+       'NESM3',
+       'NorCPM1',
+       'NorESM1-F',
+       'NorESM2-MM',
+       'SAM0-UNICON',
+       'TaiESM1'
+       'HadGEM3-GC31-LL',
+       'NorESM2-LM'
+       ]
+    esm = esms[task_id]
     # variables
     vars = ['pr', 'tas']
     # experiments
@@ -63,23 +142,23 @@ if __name__ == "__main__":
                                                     "member_id": "ensemble", "variable_id": "variable",
                                                     "zstore": "zstore", "table_id": "domain"}).reset_index(drop = True).copy()
 
+
     # keep only p1 runs:
-    # UK model only does f2 runs for some reason
-    # What are f2 vs f1 runs?
-    ukesm_data =  pangeo_data[pangeo_data['model'].str.contains('UKESM')].copy()
-    ukesm_data = ukesm_data[ukesm_data['ensemble'].str.contains('i1p1f2')].copy()
+    # Except for UK model only does f2 runs for some reason
+    if esm.contains('UKESM'):
+        pangeo_data = pangeo_data[pangeo_data['ensemble'].str.contains('i1p1f2')].copy().reset_index(drop=True).copy()
+    else:
+        pangeo_data = pangeo_data[pangeo_data['ensemble'].str.contains('i1p1f1')].copy().reset_index(drop=True).copy()
 
-    # everyone else does f1 runs
-    pangeo_data = pangeo_data[pangeo_data['ensemble'].str.contains('i1p1f1')].copy()
-
-    # combine UKESM with other models
-    pangeo_data = pd.concat([pangeo_data, ukesm_data]).reset_index(drop=True).copy()
 
     # List of possible ensemble members
     ensembles = np.unique(pangeo_data.ensemble.values)
 
     # Formatting regions
     aoi = land_main_gdf.reset_index(drop=True).copy()
+    # Getting rid of oceans and polar regions
+    aoi = aoi[aoi['Type']!= 'Ocean'].copy()
+    aoi = aoi[aoi['Continent'] != 'POLAR'].reset_index(drop=True).copy()
     aoi_labels = aoi[['Continent', 'Type', 'Name', 'Acronym']].copy()
     aoi_labels = aoi_labels.rename(columns={'Continent':'continent',
                                             'Type':'type',
@@ -224,11 +303,21 @@ if __name__ == "__main__":
 
         return mean_by_year_region_df
 
+    # Getting tas
     # Iterate over all combinations and get time series
-    results = [get_time_series(a, b, c, d, aoi, aoi_labels) for a in esms for b in exps for c in ensembles for d in vars]
+    results = [get_time_series(esm, b, c, 'tas', aoi, aoi_labels) for b in exps for c in ensembles]
 
     # Concatenate output
     comb_results = pd.concat(results).reset_index(drop=True)
 
     # Write out result
-    comb_results.to_csv(('extracted_timeseries/IPCC_all_regions_and_data.csv'), index=False)
+    comb_results.to_csv((f'extracted_timeseries/IPCC_all_regions_tas_{esm}_{ref_start}-{ref_end}.csv'), index=False)
+
+    # Iterate over all combinations and get time series
+    results = [get_time_series(esm, b, c, 'pr', aoi, aoi_labels) for b in exps for c in ensembles]
+
+    # Concatenate output
+    comb_results = pd.concat(results).reset_index(drop=True)
+
+    # Write out result
+    comb_results.to_csv((f'extracted_timeseries/IPCC_all_regions_pr_{esm}_{ref_start}-{ref_end}.csv'), index=False)
