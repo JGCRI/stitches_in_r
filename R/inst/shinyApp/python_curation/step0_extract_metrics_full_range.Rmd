@@ -147,46 +147,32 @@ prep_esm_TP_data_ipcc <- function(esmname, metric_write_dir = metrics_write_dir)
   pr_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_pr_',
                                    esmname,'_timeseries_1980_2099.csv'),
                             stringsAsFactors = FALSE) %>%
-      mutate(region = acronym) 
+      mutate(region = acronym) %>%
+              rename(ann_agg=pr) 
   
     } else {
           region_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_tas_', esmname, '_timeseries_1980-2099.csv'),
-                              stringsAsFactors = FALSE) %>% mutate(region = acronym) 
+                              stringsAsFactors = FALSE) %>% mutate(region = acronym) %>%
+          select(-tas) %>% 
+          rename(ann_agg=value) 
   
   
   
   
-  pr_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_pr_',
+    pr_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_pr_',
                                    esmname,'_timeseries_1980-2099.csv'),
                             stringsAsFactors = FALSE) %>%
-      mutate(region = acronym) 
+      mutate(region = acronym) %>%
+        select(-pr) %>% 
+              rename(ann_agg=value) 
     }
   
 
   
   if (nrow(region_timeseries)>0 & nrow(pr_timeseries)>0){
-      if(ncol(region_timeseries) > 10){
-          region_timeseries %>%
-          select(-tas) %>% 
-          rename(ann_agg=value) ->
-              region_timeseries
-      }
       
       
-      if(ncol(pr_timeseries) > 10){
-          pr_timeseries %>%
-              select(-pr) %>% 
-              rename(ann_agg=value) ->
-              pr_timeseries
-      } 
-      if(ncol(pr_timeseries) == 10){
-          pr_timeseries %>%
-              rename(ann_agg=pr) ->
-              pr_timeseries
-      }
-  
-  
-      region_tas_summary <- suppressMessages(process_time_series(time_series_df = region_timeseries))
+        region_tas_summary <- suppressMessages(process_time_series(time_series_df = region_timeseries))
     
       region_pr_summary <- suppressMessages(process_time_series(time_series_df = pr_timeseries))
       
