@@ -25,7 +25,12 @@ metrics_write_dir <-  '/Users/snyd535/Documents/GitHub/stitches_in_r/R/inst/shin
 
 
 
-
+# get ecs ordering/labels
+esm_labels <- read.csv(paste0('/Users/snyd535/Documents/GitHub/stitches_in_r/R/inst/shinyApp/python_curation/extracted_timeseries/global_tas_allesms.csv'), stringsAsFactors = FALSE) %>%
+  select(esm) %>% distinct %>% 
+  mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
+         ECS_order = as.integer(row.names(.)))
+print(esm_labels)
 
 process_time_series <- function(time_series_df, 
                                 hist_start = 1995, hist_end = 2014){
@@ -56,11 +61,12 @@ process_time_series <- function(time_series_df,
         group_by(esm, experiment, ensemble, variable, region) %>%
         summarise(average_2080_2099 = mean(ann_agg)) %>% 
         ungroup  %>%
-        bind_rows(run_df %>%
+        left_join(run_df %>%
                       filter(year >= 2040, year <= 2059) %>%
                       group_by(esm, experiment, ensemble, variable, region) %>%
                       summarise(average_2040_2059 = mean(ann_agg)) %>% 
-                      ungroup) %>% 
+                      ungroup,
+                  by = c('esm', 'experiment', 'ensemble', 'variable', 'region')) %>% 
         mutate(iasd = sd((loess_resids))) ->
         output_df
     
@@ -129,8 +135,22 @@ return(list(plot_tbl, plot_tbl_ind))
 
 
 prep_esm_TP_data_ipcc <- function(esmname, metric_write_dir = metrics_write_dir){
+    
+    if(esmname %in% c(esm_labels$esm )){
+        
+          region_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_tas_', esmname, '_timeseries_1980_2099.csv'),
+                              stringsAsFactors = FALSE) %>% mutate(region = acronym) 
   
-  region_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_tas_', esmname, '_timeseries_1980-2099.csv'),
+  
+  
+  
+  pr_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_pr_',
+                                   esmname,'_timeseries_1980_2099.csv'),
+                            stringsAsFactors = FALSE) %>%
+      mutate(region = acronym) 
+  
+    } else {
+          region_timeseries <- read.csv(paste0(timeseries_dir, 'IPCC_land_regions_tas_', esmname, '_timeseries_1980-2099.csv'),
                               stringsAsFactors = FALSE) %>% mutate(region = acronym) 
   
   
@@ -140,6 +160,9 @@ prep_esm_TP_data_ipcc <- function(esmname, metric_write_dir = metrics_write_dir)
                                    esmname,'_timeseries_1980-2099.csv'),
                             stringsAsFactors = FALSE) %>%
       mutate(region = acronym) 
+    }
+  
+
   
   if (nrow(region_timeseries)>0 & nrow(pr_timeseries)>0){
       if(ncol(region_timeseries) > 10){
@@ -188,12 +211,12 @@ prep_esm_TP_data_ipcc <- function(esmname, metric_write_dir = metrics_write_dir)
       # reshape so each row is an observation
       # observation = esm - experiment - region - tas change-tas iasd - pr pct change
       region_tas_summary[[1]] %>% 
-       select(esm, experiment, ensemble, region, iasd, change_2080_2099, change_2040_2059) %>%
+       select(esm, experiment,  region, iasd, change_2080_2099, change_2040_2059) %>%
         rename(tas_change_2080_2099 = change_2080_2099,
                tas_change_2040_2059 = change_2040_2059) %>%
         left_join(region_pr_summary[[1]] %>%
-                    select(esm, experiment, ensemble, region, pct_change_2080_2099, pct_change_2040_2059) ,
-                  by = c('esm', 'experiment', 'ensemble', 'region'))   %>%
+                    select(esm, experiment,  region, pct_change_2080_2099, pct_change_2040_2059) ,
+                  by = c('esm', 'experiment',  'region'))   %>%
         rename(pr_pct_change_2080_2099 = pct_change_2080_2099,
                pr_pct_change_2040_2059 = pct_change_2040_2059) ->
         region_summary
