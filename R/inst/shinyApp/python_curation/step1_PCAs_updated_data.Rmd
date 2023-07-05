@@ -252,8 +252,12 @@ data_pca$x %>%
 
 ```{r}
 ggplot(coordinates) +
-  geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario))
+    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) 
 
+ggplot(coordinates) +
+    geom_text(mapping = aes(x = PC1, y = PC2, color = model, label = model), size=0.95) 
+
+    
 ggplot(coordinates) +
   geom_point(mapping = aes(x = PC1, y = PC2, color = scenario))
 ```
