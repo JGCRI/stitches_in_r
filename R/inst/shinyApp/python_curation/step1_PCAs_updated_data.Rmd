@@ -1,0 +1,581 @@
+---
+title: "PCA analysis of extracted metrics - updated to Noah's full set of data"
+author: "ACS"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+
+# helper function to process time series 
+
+And some package and labeling info
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(factoextra) # easier visualizing outputs of prcomp
+
+
+timeseries_dir <- 'extracted_timeseries/'
+
+metrics_write_dir <-  'extracted_timeseries/extracted_metrics/'
+
+
+# get ecs ordering/labels
+esm_labels <- read.csv(paste0(timeseries_dir,'global_tas_allesms.csv'), stringsAsFactors = FALSE) %>%
+  select(esm) %>% distinct %>% 
+  mutate(plotesm = paste0(letters[as.integer(row.names(.))], '.', esm),
+         ECS_order = as.integer(row.names(.)))
+print(esm_labels)
+
+```
+
+
+
+# Spatial info
+
+we want the shapes for plotting anyway, so prep them
+
+```{r, echo=FALSE}
+
+library(sf)
+
+shp <- st_read(dsn = 'IPCC-WGI-reference-regions-v4_shapefile/IPCC-WGI-reference-regions-v4.shp', stringsAsFactors = F)
+
+# add a numerical region id
+shp %>% 
+  mutate(region_id = as.integer(row.names(.))) ->
+  shp
+
+# add coordinate info probably
+shp1 <-  st_transform(shp, "+proj=longlat +ellps=WGS84 +datum=WGS84")
+
+# extract
+coords <- as.data.frame(st_coordinates(shp1))
+
+
+# get a mean lon and lat value in each shape
+coords %>%
+  rename(lon = X, lat = Y, region_id = L3) %>%
+  left_join(as.data.frame(shp) %>% select(region_id, Acronym), by = 'region_id') %>%
+  filter(grepl('PO', Acronym)) %>% 
+  # have to have lon on 0:360 so th pacific ocean behaves even though not
+  # looking at that here
+  mutate(lon_360 = if_else(lon >=0, lon, lon+360))%>%
+  group_by(region_id) %>%
+  summarise(mean_lon = mean(lon_360),
+            mean_lat = mean(lat)) %>%
+  ungroup  %>%
+  mutate(mean_lon = if_else(mean_lon >= 0 & mean_lon <= 180, 
+                            mean_lon, mean_lon - 360) ) ->
+  mean_pts_PO
+
+coords %>%
+  rename(lon = X, lat = Y, region_id = L3) %>%
+  left_join(as.data.frame(shp) %>% select(region_id, Acronym), by = 'region_id') %>%
+  filter(!grepl('PO', Acronym)) %>% 
+  # have to have lon on 0:360 so th pacific ocean behaves even though not
+  # looking at that here
+  group_by(region_id) %>%
+  summarise(mean_lon = mean(lon),
+            mean_lat = mean(lat)) %>%
+  ungroup  %>% 
+  bind_rows(mean_pts_PO)->
+  mean_pts 
+
+
+```
+
+
+```{r, fig.width=14, fig.height=10, echo=FALSE}
+# Join to the shape file and make sure this very simple way of
+# doing things ends up with a lon lat that is actually in each region
+shp %>%
+  left_join(mean_pts, by = 'region_id') ->
+  shp
+
+ggplot() +
+  geom_sf(data = shp  ) +
+  geom_point(data = shp, mapping = aes(x = mean_lon, y = mean_lat), color = 'red') +
+  geom_text(data = shp, mapping = aes(label = Acronym, x = mean_lon, y= mean_lat), size =5)
+
+```
+
+
+# Load ESM data that's been processed
+```{r}
+region_summary_main <- read.csv(paste0(metrics_write_dir, 'IPCC_land_regions_metrics.csv'), 
+                                stringsAsFactors = FALSE)
+region_summary_main %>%
+  filter(experiment != 'ssp119',
+         experiment != 'ssp434',
+         experiment != 'ssp460',
+         experiment != 'ssp534-over')  %>%
+    rename(region = acronym) ->
+  region_summary 
+
+print(head(region_summary))
+
+```
+# Prep data for PCA
+
+- idea is that there's something really similar across ESMs, especially for SSP126/245 -> their RGB maps have so much in common.
+
+- is there a sort of core map that gets deviations added to as you move through scenarios and ESMs? Or how many distinct maps 
+do we actually have
+
+- And the aim of the archive is to establish that our selection of ESMs forms a spanning set of vectors for all/most of CMIP6
+
+- observation = scenarioXesm
+
+- individual variable is a regionXmetric
+
+- so each observation vector is `3*Nregions` long: `<Tr1...Trn, Pr1...Prn, IASDr1...IASDrn >` for a scenarioXesm <->
+there are 48 observations for each of 129 variables
+
+-  And then becaues we're interested in a pseudo-basis for the CMIP6 archive, we want the training data to be all scenarios and ESMs
+
+- Out of sample tests -> how does basis do on overshoots that it doesn't train on; withhold one of the 12 ESMs and learn from other 11
+to see how it goes; then see how a completely external ESM does on training from all 12
+
+- nothing _a priori_ to preclude us from doing EOFs on the gridded time series data, or the gridded metrics, but having on IPCC regions 
+avoids the issue of all ESMs being on their own grids 
+
+- and overall doing region metrics helps keep data size operating on manageable
+
+
+```{r}
+# reshape:
+grouped_data <- split(region_summary, list(region_summary$esm, region_summary$experiment))
+grouped_data <- grouped_data[sapply(grouped_data, function(x) dim(x)[1]) > 0]
+
+shaped_data <- lapply(grouped_data, function(group){
+    if (nrow(group) >0) {
+      group %>%
+        filter(variable == 'tas') %>% 
+        select(esm, experiment, ensemble,type, region,
+               iasd, end_anomaly, mid_anomaly) %>%
+        rename(tas_iasd = iasd,
+               tas_end_anomaly = end_anomaly,     
+               tas_mid_anomaly = mid_anomaly) %>% 
+        left_join(group %>%
+                      filter(variable == 'pr') %>% 
+                      select(esm, experiment, ensemble,type, region,
+                             iasd, end_anomaly_pct, mid_anomaly_pct) %>%
+                      rename(pr_iasd = iasd,
+                             pr_end_anomaly_pct = end_anomaly_pct,    
+                             pr_mid_anomaly_pct = mid_anomaly_pct),
+                  by = c('esm','experiment', 'ensemble', 'type', 'region')
+               ) ->
+    reshaped
+    
+    reshaped %>%
+        group_by(esm, experiment, type, region) %>%
+        summarize(tas_iasd=mean(tas_iasd),
+                  tas_end_anomaly=mean(tas_end_anomaly, na.rm = T),
+                  tas_mid_anomaly = mean(tas_mid_anomaly, na.rm = T),
+                  pr_iasd = mean(pr_iasd, na.rm = T),
+                  pr_end_anomaly_pct = mean(pr_end_anomaly_pct, na.rm = T),
+                  pr_mid_anomaly_pct = mean(pr_mid_anomaly_pct, na.rm = T) ) %>%
+        ungroup() %>%
+        mutate(ensemble = 'ensemble_avg') -> #%>%
+        #bind_rows(reshaped) ->
+        reshaped2
+    
+    #TODO need to change shaping if including ensemble members
+    reshaped2 %>%
+        select(-type) %>%
+        gather(metric, value, -esm, -experiment, -ensemble, -region) %>%
+        mutate(row_id = paste0(region, '~', metric),
+           col_id = paste0(esm, '~', experiment, '~', ensemble)) %>%
+        select(-esm, -experiment,-ensemble, -region, -metric) %>%
+        as.data.frame() ->
+    reshaped3 
+  
+  colnames(reshaped3) <- c(paste0(unique(reshaped3$col_id)), 'row_id', 'col_id')
+  rownames(reshaped3) <- paste0(reshaped3$row_id)
+  
+  reshaped3 %>% 
+    select(-col_id, -row_id) ->
+    out
+  
+  return(out)  
+    }
+    
+    }
+)
+
+# combine columns but then transpose because prcomp wants rows to be observations 
+# and columns to be variables (but doing it the other way first is easier to code)
+data <- t(do.call(cbind, shaped_data) )
+
+print(str(data))
+```
+
+
+# do PCA
+
+have to remove some NA's:
+
+- manually checked all 4 -  no PR ens average values
+
+
+```{r}
+data1 <- na.omit(data)
+print('removed rows due to missing data')
+print(row.names(data)[c(which(!(row.names(data) %in% row.names(data1))))])
+
+
+data_pca <- prcomp(data1, center=TRUE, scale = TRUE)
+
+# quick visualize
+factoextra::fviz_eig(data_pca)
+```
+
+## further visualization 
+
+```{r}
+# coordinates of each ESM-SSP combo in the PCs
+data_pca$x %>%
+  as.data.frame() %>%
+  mutate(id = row.names(.)) %>%
+  separate(id, into=c('model', 'scenario', 'ensemble'), sep = '~') %>%
+  select(model, scenario, PC1, PC2, PC3, PC4, PC5, PC6, PC7, PC8, PC9)->
+  coordinates
+```
+
+## PC1 vs PC2
+
+```{r}
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario))
+
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC1, y = PC2, color = scenario))
+```
+
+## PC1 vs PC3
+
+```{r}
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario))
+
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC1, y = PC3, color = scenario))
+```
+
+## PC1 vs PC4
+
+```{r}
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC1, y = PC4, color = model, shape = scenario))
+
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC1, y = PC4, color = scenario))
+```
+
+## PC2 vs PC3
+
+```{r}
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC2, y = PC3, color = model, shape = scenario))
+
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC2, y = PC3, color = scenario))
+```
+
+## PC2 vs PC4
+
+```{r}
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC2, y = PC4, color = model, shape = scenario))
+
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC2, y = PC4, color = scenario))
+```
+
+
+## PC3 vs PC4
+
+```{r}
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC3, y = PC4, color = model, shape = scenario))
+
+ggplot(coordinates) +
+  geom_point(mapping = aes(x = PC3, y = PC4, color = scenario))
+```
+
+
+## plot PCs as maps
+
+
+```{r}
+pcs <- data_pca$rotation
+
+str(pcs) 
+
+
+# pull the region and metric info back in
+as.data.frame(pcs) %>%
+  mutate(row_id = row.names(.)) %>%
+  separate(row_id, into = c('region', 'metric'), sep ='~') ->
+  tmp
+
+
+# We want to convert each set of 3 metrics in a region to a single
+# rgb coded value.
+# and we want all on same color scale. 
+
+# so reshape for each metric (which goes to one of r, g, b)
+# with all PCs want to consider stacked.
+tmp %>%
+  filter(metric == 'tas_end_anomaly') %>%
+  select(region, metric, PC1) %>%
+  rename(tas_end_anomaly = PC1) %>%
+  mutate(pc = 'PC1') %>%
+    bind_rows(tmp %>%
+                filter(metric == 'tas_end_anomaly') %>%
+                select(region, metric, PC2) %>%
+                rename(tas_end_anomaly = PC2) %>% 
+                mutate(pc = 'PC2'), 
+              tmp %>%
+                filter(metric == 'tas_end_anomaly') %>%
+                select(region, metric, PC3) %>%
+                rename(tas_end_anomaly = PC3) %>% 
+                mutate(pc = 'PC3') ,
+              tmp %>%
+                filter(metric == 'tas_end_anomaly') %>%
+                select(region, metric, PC4) %>%
+                rename(tas_end_anomaly = PC4) %>% 
+                mutate(pc = 'PC4'),
+              tmp %>%
+                filter(metric == 'tas_end_anomaly') %>%
+                select(region, metric, PC5) %>%
+                rename(tas_end_anomaly = PC5) %>% 
+                mutate(pc = 'PC5'),
+              tmp %>%
+                filter(metric == 'tas_end_anomaly') %>%
+                select(region, metric, PC6) %>%
+                rename(tas_end_anomaly = PC6) %>% 
+                mutate(pc = 'PC6'),
+              tmp %>%
+                filter(metric == 'tas_end_anomaly') %>%
+                select(region, metric, PC7) %>%
+                rename(tas_end_anomaly = PC7) %>% 
+                mutate(pc = 'PC7'),
+              tmp %>%
+                filter(metric == 'tas_end_anomaly') %>%
+                select(region, metric, PC8) %>%
+                rename(tas_end_anomaly = PC8) %>% 
+                mutate(pc = 'PC8'),
+              tmp %>%
+                filter(metric == 'tas_end_anomaly') %>%
+                select(region, metric, PC9) %>%
+                rename(tas_end_anomaly = PC9) %>% 
+                mutate(pc = 'PC9'),
+              tmp %>%
+                filter(metric == 'tas_end_anomaly') %>%
+                select(region, metric, PC10) %>%
+                rename(tas_end_anomaly = PC10) %>% 
+                mutate(pc = 'PC10')
+              ) ->
+  tas
+print(head(tas))
+print(tail(tas))
+
+
+tmp %>%
+  filter(metric == 'pr_end_anomaly_pct') %>%
+  select(region, metric, PC1) %>%
+  rename(pr_end_anomaly_pct = PC1) %>%
+  mutate(pc = 'PC1') %>%
+  bind_rows(tmp %>%
+              filter(metric == 'pr_end_anomaly_pct') %>%
+              select(region, metric, PC2) %>%
+              rename(pr_end_anomaly_pct = PC2) %>%
+              mutate(pc = 'PC2'), 
+            tmp %>%
+              filter(metric == 'pr_end_anomaly_pct') %>%
+              select(region, metric, PC3) %>%
+              rename(pr_end_anomaly_pct = PC3) %>%
+              mutate(pc = 'PC3') ,
+            tmp %>%
+              filter(metric == 'pr_end_anomaly_pct') %>%
+              select(region, metric, PC4) %>%
+              rename(pr_end_anomaly_pct = PC4) %>%
+              mutate(pc = 'PC4') ,
+            tmp %>%
+              filter(metric == 'pr_end_anomaly_pct') %>%
+              select(region, metric, PC5) %>%
+              rename(pr_end_anomaly_pct = PC5) %>%
+              mutate(pc = 'PC5') ,
+            tmp %>%
+              filter(metric == 'pr_end_anomaly_pct') %>%
+              select(region, metric, PC6) %>%
+              rename(pr_end_anomaly_pct = PC6) %>%
+              mutate(pc = 'PC6') ,
+            tmp %>%
+              filter(metric == 'pr_end_anomaly_pct') %>%
+              select(region, metric, PC7) %>%
+              rename(pr_end_anomaly_pct = PC7) %>%
+              mutate(pc = 'PC7') ,
+            tmp %>%
+              filter(metric == 'pr_end_anomaly_pct') %>%
+              select(region, metric, PC8) %>%
+              rename(pr_end_anomaly_pct = PC8) %>%
+              mutate(pc = 'PC8') ,
+            tmp %>%
+              filter(metric == 'pr_end_anomaly_pct') %>%
+              select(region, metric, PC9) %>%
+              rename(pr_end_anomaly_pct = PC9) %>%
+              mutate(pc = 'PC9') ,
+            tmp %>%
+              filter(metric == 'pr_end_anomaly_pct') %>%
+              select(region, metric, PC10) %>%
+              rename(pr_end_anomaly_pct = PC10) %>%
+              mutate(pc = 'PC10') 
+              ) ->
+  pr
+
+
+tmp %>%
+  filter(metric == 'tas_iasd') %>%
+  select(region, metric, PC1) %>%
+  rename(tas_iasd = PC1) %>%
+  mutate(pc = 'PC1') %>%
+  bind_rows(tmp %>%
+              filter(metric == 'tas_iasd') %>%
+              select(region, metric, PC2) %>%
+              rename(tas_iasd = PC2) %>%
+              mutate(pc = 'PC2'), 
+            tmp %>%
+              filter(metric == 'tas_iasd') %>%
+              select(region, metric, PC3) %>%
+              rename(tas_iasd = PC3) %>%
+              mutate(pc = 'PC3') ,
+            tmp %>%
+              filter(metric == 'tas_iasd') %>%
+              select(region, metric, PC4) %>%
+              rename(tas_iasd = PC4) %>%
+              mutate(pc = 'PC4') ,
+            tmp %>%
+              filter(metric == 'tas_iasd') %>%
+              select(region, metric, PC5) %>%
+              rename(tas_iasd = PC5) %>%
+              mutate(pc = 'PC5'), 
+            tmp %>%
+              filter(metric == 'tas_iasd') %>%
+              select(region, metric, PC6) %>%
+              rename(tas_iasd = PC6) %>%
+              mutate(pc = 'PC6'), 
+            tmp %>%
+              filter(metric == 'tas_iasd') %>%
+              select(region, metric, PC6) %>%
+              rename(tas_iasd = PC6) %>%
+              mutate(pc = 'PC6'), 
+            tmp %>%
+              filter(metric == 'tas_iasd') %>%
+              select(region, metric, PC7) %>%
+              rename(tas_iasd = PC7) %>%
+              mutate(pc = 'PC7'), 
+            tmp %>%
+              filter(metric == 'tas_iasd') %>%
+              select(region, metric, PC8) %>%
+              rename(tas_iasd = PC8) %>%
+              mutate(pc = 'PC8'), 
+            tmp %>%
+              filter(metric == 'tas_iasd') %>%
+              select(region, metric, PC9) %>%
+              rename(tas_iasd = PC9) %>%
+              mutate(pc = 'PC9'), 
+            tmp %>%
+              filter(metric == 'tas_iasd') %>%
+              select(region, metric, PC10) %>%
+              rename(tas_iasd = PC10) %>%
+              mutate(pc = 'PC10')
+              ) ->
+tas_iasd
+
+
+tas %>%
+  select(-metric) %>%
+  left_join(pr %>% select(-metric), by =c('region', 'pc')) %>%
+  left_join(tas_iasd %>% select(-metric), by =c('region', 'pc')) ->
+  colored_pcs
+
+
+colored_pcs$r <- scales::rescale(colored_pcs$tas_end_anomaly, to =c(0,255))
+colored_pcs$g <- scales::rescale(colored_pcs$tas_iasd, to =c(0,255))
+colored_pcs$b <- scales::rescale(colored_pcs$pr_end_anomaly_pct, to =c(0,255))
+  
+colored_pcs %>%
+  left_join(as.data.frame(shp) %>% select(Acronym, mean_lon, mean_lat), by = c('region' = 'Acronym')) %>%
+  rename(lon  = mean_lon, lat = mean_lat) %>%
+  mutate(color = rgb(.$r, .$g, .$b, maxColorValue  = 255),
+         color_order = as.integer(row.names(.))) ->
+  pc_plotting
+
+pc_plotting %>%
+  select(color_order, color) %>%
+  distinct() ->
+  colors
+
+shp %>% 
+  left_join(pc_plotting, by = c('Acronym' = 'region'))->
+  shp_pcs
+
+p<- ggplot() +
+  geom_sf(data = shp_pcs %>% filter(pc != 'PC10') %>% na.omit, aes(fill = as.factor(color_order)) ) +
+  scale_fill_manual(values =colors$color)+
+  facet_wrap(~pc, ncol=3) +
+  theme(legend.position = 'none') 
+p
+
+```
+
+```{r}
+#look at whether Precip inc or dec -> not just the PCs' precip entries >= 0
+# because standardized/
+
+as.data.frame(data_pca$center) %>%
+  mutate(row_id = row.names(.)) %>%
+  filter(grepl('pr_end_anomaly_pct', row_id)) %>%
+  separate(row_id, into  = c('region', 'trash'), sep = '~') %>%
+  select(-trash) ->
+  pr_centers
+
+as.data.frame(data_pca$scale) %>%
+  mutate(row_id = row.names(.)) %>%
+  filter(grepl('pr_end_anomaly_pct', row_id)) %>%
+  separate(row_id, into  = c('region', 'trash'), sep = '~') %>%
+  select(-trash) ->
+  pr_scales
+
+
+
+
+shp_pcs %>%
+  left_join(pr_centers, by = c('Acronym'='region')) %>%
+  left_join(pr_scales, by = c('Acronym'='region')) %>%
+  mutate(precip_change = if_else( ((pr_end_anomaly_pct*`data_pca$scale`)- `data_pca$center`) >=0, 'inc', 'dec'))->
+  shp_pcs2
+
+
+ggplot() +
+    geom_sf(data = shp_pcs2 %>% filter(pc != 'PC10') %>% na.omit, aes(#fill = as.factor(color_order),
+                                             color = precip_change )) +
+  #scale_fill_manual(values =colors$orig_color)+
+  scale_color_manual(values = c('red', 'blue'))+
+  facet_wrap(~pc, ncol=3) +
+  theme(legend.position = 'none') 
+  
+```
+
+
+
+
+ 
