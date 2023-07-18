@@ -1,0 +1,298 @@
+---
+title: "Eigenspaces"
+author: "acs"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+
+# helper function to process time series 
+
+And some package and labeling info
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+
+timeseries_dir <- 'extracted_timeseries/'
+
+metrics_write_dir <-  'extracted_timeseries/extracted_metrics/'
+
+
+# strawman subset of ESMs from our original 12, have all 4 experiments each
+subset <- c('CAMS-CSM1-0' , 'FGOALS-g3', 'MRI-ESM2-0' ,'CESM2-WACCM', 'CanESM5')
+            
+            
+```
+
+
+# Load ESM data that's been processed
+```{r}
+region_summary_main <- read.csv(paste0(metrics_write_dir, 'IPCC_land_regions_metrics.csv'), 
+                                stringsAsFactors = FALSE)
+region_summary_main %>%
+  filter(experiment != 'ssp119',
+         experiment != 'ssp434',
+         experiment != 'ssp460',
+         experiment != 'ssp534-over')  %>%
+    rename(region = acronym) ->
+  region_summary 
+
+print(head(region_summary))
+
+```
+
+# Prep data for PCA
+
+```{r}
+# reshape:
+grouped_data <- split(region_summary, list(region_summary$esm, region_summary$experiment))
+grouped_data <- grouped_data[sapply(grouped_data, function(x) dim(x)[1]) > 0]
+
+shaped_data <- lapply(grouped_data, function(group){
+    if (nrow(group) >0) {
+      group %>%
+        filter(variable == 'tas') %>% 
+        select(esm, experiment, ensemble,type, region,
+               iasd, end_anomaly, mid_anomaly) %>%
+        rename(tas_iasd = iasd,
+               tas_end_anomaly = end_anomaly,     
+               tas_mid_anomaly = mid_anomaly) %>% 
+        left_join(group %>%
+                      filter(variable == 'pr') %>% 
+                      select(esm, experiment, ensemble,type, region,
+                             iasd, end_anomaly_pct, mid_anomaly_pct) %>%
+                      rename(pr_iasd = iasd,
+                             pr_end_anomaly_pct = end_anomaly_pct,    
+                             pr_mid_anomaly_pct = mid_anomaly_pct),
+                  by = c('esm','experiment', 'ensemble', 'type', 'region')
+               ) ->
+    reshaped
+    
+    reshaped %>%
+        group_by(esm, experiment, type, region) %>%
+        summarize(tas_iasd=mean(tas_iasd),
+                  tas_end_anomaly=mean(tas_end_anomaly, na.rm = T),
+                  tas_mid_anomaly = mean(tas_mid_anomaly, na.rm = T),
+                  pr_iasd = mean(pr_iasd, na.rm = T),
+                  pr_end_anomaly_pct = mean(pr_end_anomaly_pct, na.rm = T),
+                  pr_mid_anomaly_pct = mean(pr_mid_anomaly_pct, na.rm = T) ) %>%
+        ungroup() %>%
+        mutate(ensemble = 'ensemble_avg') -> #%>%
+        #bind_rows(reshaped) ->
+        reshaped2
+    
+    #TODO need to change shaping if including ensemble members
+    reshaped2 %>%
+        select(-type) %>%
+        gather(metric, value, -esm, -experiment, -ensemble, -region) %>%
+        mutate(row_id = paste0(region, '~', metric),
+           col_id = paste0(esm, '~', experiment, '~', ensemble)) %>%
+        select(-esm, -experiment,-ensemble, -region, -metric) %>%
+        as.data.frame() ->
+    reshaped3 
+  
+  colnames(reshaped3) <- c(paste0(unique(reshaped3$col_id)), 'row_id', 'col_id')
+  rownames(reshaped3) <- paste0(reshaped3$row_id)
+  
+  reshaped3 %>% 
+    select(-col_id, -row_id) ->
+    out
+  
+  return(out)  
+    }
+    
+    }
+)
+
+# combine columns but then transpose because prcomp wants rows to be observations 
+# and columns to be variables (but doing it the other way first is easier to code)
+full_data <- t(do.call(cbind, shaped_data) )
+
+
+# Drop anything with missing data
+full_data1 <- na.omit(full_data)
+print('removed rows due to missing data')
+print(row.names(full_data)[c(which(!(row.names(full_data) %in% row.names(full_data1))))])
+
+
+full_data <- full_data1 
+rm(full_data1)
+```
+
+And the subsetted ESMs
+
+```{r}
+as.data.frame(full_data) %>%
+    mutate(temp = row.names(.)) %>%
+    separate(temp, into=c('esm', 'trash'), sep = '~', extra='merge') %>%
+    filter(esm %in% subset) %>% 
+    select(-esm, -trash) %>%
+    as.matrix(.) ->
+    subdata
+```
+
+# PCA
+
+## cmip6 'truth'
+
+```{r}
+full_pca <- prcomp(full_data, center=TRUE, scale = TRUE)
+
+
+# eigenspace from the PCA
+full_eigenval <- data.frame(eigenvalues=(full_pca$sdev)^2)
+full_eigenvec <- full_pca$rotation
+
+# skree
+var_explained_df <- data.frame(var_explained=(full_pca$sdev)^2/sum((full_pca$sdev)^2)) %>%
+    mutate(PC = as.integer(row.names(.)))
+
+var_explained_df %>%
+  ggplot(aes(x=PC,y=var_explained, group=1))+
+  geom_point(size=4)+
+  geom_line()+
+  labs(title="Scree plot: PCA on scaled data - all ESMs")
+
+
+pfull <- var_explained_df %>%
+    filter(PC <=15)%>%
+  ggplot(aes(x=PC,y=var_explained, group=1))+
+  geom_point(size=4)+
+  geom_line()+
+  labs(title="Scree plot: PCA on scaled data - all ESMs")
+
+pfull 
+```
+
+
+
+
+## subset
+
+Functionalise from here, basically I think? :
+
+```{r}
+
+
+sub_pca <- prcomp(subdata, center=TRUE, scale = TRUE)
+
+
+# eigenspace from the PCA
+sub_eigenval <- data.frame(eigenvalues=(sub_pca$sdev)^2)
+sub_eigenvec <- sub_pca$rotation
+
+# skree
+var_explained_dfsub <- data.frame(var_explained=(sub_pca$sdev)^2/sum((sub_pca$sdev)^2)) %>%
+    mutate(PC = as.integer(row.names(.)))
+
+var_explained_dfsub %>%
+  ggplot(aes(x=PC,y=var_explained, group=1))+
+  geom_point(size=4)+
+  geom_line()+
+  labs(title="Scree plot: PCA on scaled data - subset ESMs")
+
+
+psub<- var_explained_dfsub %>%
+    filter(PC <=15)%>%
+  ggplot(aes(x=PC,y=var_explained, group=1))+
+  geom_point(size=4)+
+  geom_line()+
+  labs(title="Scree plot: PCA on scaled data - subset ESMs")
+psub
+```
+## side by side scree
+
+```{r}
+pfull
+psub
+
+```
+
+
+
+-> first five eigenvalues focus
+
+
+
+# First 5 eigenvalues
+```{r}
+data.frame(full_eigenval = full_eigenval[1:5,],
+           sub_eigenval = sub_eigenval[1:5,]) ->
+    eigenval_compare
+
+
+print(eigenval_compare)
+
+full_vec <- full_eigenvec[, 1:5]
+sub_vec <- sub_eigenvec[, 1:5]
+
+vec_diffs <- t(sapply(1:6, function(colindex){
+    data_frame(PC = colindex,
+               PC_distance = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex] - 
+                                           sub_eigenval[colindex,]*sub_eigenvec[,colindex] )^2)),
+               full_PC_length = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex])^2)),
+               sub_PC_length = sqrt(sum((sub_eigenval[colindex,]*sub_eigenvec[,colindex])^2))) ->
+        out
+    return(out)
+}))
+
+vec_diffs
+```
+
+# functionalized
+
+```{r}
+
+get_subset_data <- function(esmsubset, fulldata){
+    as.data.frame(fulldata) %>%
+    mutate(temp = row.names(.)) %>%
+    separate(temp, into=c('esm', 'trash'), sep = '~', extra='merge') %>%
+    filter(esm %in% esmsubset) %>% 
+    select(-esm, -trash) %>%
+    as.matrix(.) ->
+    subdata
+    return(subdata)
+}
+
+compare_eigenspaces <- function(fullpca_eigenspace, subsetdata, n_eigenvals = 5){
+    
+    # eigenspace from the PCA
+    full_eigenval <- fullpca_eigenspace[[1]]
+    full_eigenvec <- fullpca_eigenspace[[2]]
+
+    
+    sub_pca <- prcomp(subsetdata, center=TRUE, scale = TRUE) 
+    # eigenspace from the PCA
+    sub_eigenval <- data.frame(eigenvalues=(sub_pca$sdev)^2)
+    sub_eigenvec <- sub_pca$rotation
+    rm(sub_pca)
+    
+    
+    vec_diffs <- t(sapply(1:n_eigenvals, function(colindex){
+    data_frame(PC = colindex,
+               PC_distance = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex] - 
+                                           sub_eigenval[colindex,]*sub_eigenvec[,colindex] )^2)),
+               full_PC_length = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex])^2)),
+               sub_PC_length = sqrt(sum((sub_eigenval[colindex,]*sub_eigenvec[,colindex])^2))) %>%
+            mutate( normalized_distance = PC_distance/full_PC_length) ->
+        out
+        
+        return(out)
+        }))
+    
+    return(vecdiffs)
+}
+
+loop_over_subsets <- function(){}
+identify_subsets <- function(fulldata){}
+########
+    full_eigenval <- data.frame(eigenvalues=(full_pca$sdev)^2)
+    full_eigenvec <- full_pca$rotation
+```
+
