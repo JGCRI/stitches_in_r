@@ -8,8 +8,31 @@ output:
     toc_float: true
 ---
 
+# Goal
 
-# helper function to process time series 
+from a selection of possible subset/chosen ESMs, come up with a metric for each
+of thoes subsets that says how good the subset is at representing the 'truth' 
+that is the PCA of all of the CMIP6 data. 
+
+Then select the subset of ESMs with the smallest value for that metric and those
+are our 'curated archive' ESMs.
+
+Work below covers 2 different metrics:
+
+1. The projection of all CMIP6 data into the first N eigenvectors from the PCA
+of all data vs projection of all CMIP6 data into the first N eigenvectors from 
+the PCA of the subset data. Calculate NRMS between those two projections for each
+CMIP6 esmXscenario. Metric is the average value of all of those NRMS's.
+
+- saying for each subset of 5 ESMs, how similar is all CMIP6 data projected
+into that subset's space vs projected into the 'true' space 
+
+2. The coefficients of all CMIP6 data into the first N eigenvectors from the PCA
+of all data. For each of the OOS esmXscenarios, calculate the L2 distance 
+between that and each esmXscenario in the subset data
+
+
+# set up
 
 And some package and labeling info
 
@@ -27,11 +50,17 @@ metrics_write_dir <-  'extracted_timeseries/extracted_metrics/'
 # strawman subset of ESMs from our original 12, have all 4 experiments each
 subset <- c('CAMS-CSM1-0' , 'FGOALS-g3', 'MRI-ESM2-0' ,'CESM2-WACCM', 'CanESM5')
             
+
+# ESMS that dont have 4 experiments
+non_candidate_esm <- c("E3SM-1-1", "FIO-ESM-2-0", "GFDL-CM4", "IITM-ESM",
+                       "IPSL-CM5A2-INCA", "KIOST-ESM", "NESM3", "NorESM2-LM")
             
 ```
 
 
 # Load ESM data that's been processed
+
+
 ```{r}
 region_summary_main <- read.csv(paste0(metrics_write_dir, 'IPCC_land_regions_metrics.csv'), 
                                 stringsAsFactors = FALSE)
@@ -206,6 +235,8 @@ psub<- var_explained_dfsub %>%
   labs(title="Scree plot: PCA on scaled data - subset ESMs")
 psub
 ```
+
+
 ## side by side scree
 
 ```{r}
@@ -220,79 +251,327 @@ psub
 
 
 
-# First 5 eigenvalues
+# Compare subset PCA space with full PCA space
+
+## differences in the projections of the same data 
+
+We've picked our subset of ESMs, so we project each available CMIP6 data row 
+into: 
+
+1. the first 5 eigenvectors of the full data
+2. the first 5 eigenvectors of the subset data
+
+Then compare those projections. 
+
+then this will be repeated for every combination of 5 ESMs
+
+Then pick the combo of 5 ESMs based on minimizing error for all observations.
+
+- Pro: don't have to set a cutoff, can just select subset with smallest error
+
+- con: a lot of calculations
+
 ```{r}
-data.frame(full_eigenval = full_eigenval[1:5,],
-           sub_eigenval = sub_eigenval[1:5,]) ->
-    eigenval_compare
+
+# project new data onto the PCA space
+#TODO double check with fresher eyes
+project_pca <- function(data, pca, n_eigenvalues=5){
+    
+    # don't need this for full data on full pca, could just do pca$x[,1:n]
+    # but for full data on sub pca, do need this:
+    coeff <- scale(data, pca$center, pca$scale) %*% pca$rotation[,1:n_eigenvalues]
+    
+    reconstructions <- sapply(1:nrow(data), function(rowindex){
+        reconstructed <- rowSums(sweep(pca$rotation[,1:n_eigenvalues], 
+                                       MARGIN=2,
+                                       coeff[rowindex,],
+                                       `*`))
+        return(reconstructed)
+    })
+    
+    colnames(reconstructions) <- rownames(data)
+    return(reconstructions)
+}
+
+# reconstruct the subdata in the space of first 5 eigenvectors of full data
+recon_full <- project_pca(data = full_data, pca = full_pca, n_eigenvalues = 5)
 
 
-print(eigenval_compare)
+# reconstruct the subdata in the space of first 5 eigenvectors of sub data
+recon_sub <- project_pca(data = full_data, pca = sub_pca, n_eigenvalues = 5)
 
-full_vec <- full_eigenvec[, 1:5]
-sub_vec <- sub_eigenvec[, 1:5]
+errs <- data.frame()
+for (colindex in 1:ncol(recon_sub)){
 
-vec_diffs <- t(sapply(1:6, function(colindex){
-    data_frame(PC = colindex,
-               PC_distance = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex] - 
-                                           sub_eigenval[colindex,]*sub_eigenvec[,colindex] )^2)),
-               full_PC_length = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex])^2)),
-               sub_PC_length = sqrt(sum((sub_eigenval[colindex,]*sub_eigenvec[,colindex])^2))) ->
-        out
-    return(out)
-}))
+    sub <- recon_sub[, colindex]
+    full <- recon_full[,colindex]
+    
+    bind_rows(data.frame(id = colnames(recon_sub)[colindex]) %>%
+                  mutate(rms = sqrt(sum((sub - full)^2)) ,
+                         nrms = rms /sqrt(sum((full)^2))) ,
+              errs) ->
+        errs
 
-vec_diffs
+}
+
+
+errs %>%
+    separate(id, into = c('esm', 'scenario', 'ensemble'), sep ='~')  %>%
+    group_by(esm) %>%
+    summarize(avg_nrms_across_exps = mean(nrms)) %>%
+    ungroup ->
+    nrms
+
+mean(nrms$avg_nrms_across_exps)
 ```
 
-# functionalized
+
+
+
+
+
+# compare coefficients in full PCA space
+
+from the set of available coefficients in the full PCA space, select models whose
+coefficients span the space in the sense of:
+
+- every ESM is 'close enough' to one of the selected models in terms of L2
+distance of coefficients
+
+- Pro: only need the full pca, not a pca of every candidate subset so fewer 
+calculations
+
+- Con: have to decide on a cutoff
+
+```{r}
+n_eigenvalues <- 5
+
+
+coeff <- as.data.frame(full_pca$x[,1:n_eigenvalues])
+
+# reshape so have info by ESM and experiment
+coeff %>%
+    mutate(id = row.names(.)) %>%
+    separate(id, into = c('esm', 'scenario', 'ensemble'), sep ='~') %>%
+    gather(pc, value, -esm, -scenario, -ensemble) -> # %>%
+    # spread(scenario, value) ->
+    coeff_all_ESM
+
+
+# pull off the subset coefficients into their own DF for comparison
+coeff_all_ESM %>%
+    filter(esm %in% subset)  %>%
+    spread(scenario, value) ->
+    coeff_sub_ESM
+
+out <- data.frame()
+for (esmname in unique(coeff_all_ESM$esm)){
+    
+    if(!(esmname %in% subset)){
+        
+        coeff_all_ESM %>%
+            filter(esm == esmname) ->
+            oos 
+        
+        
+        # For each subset ESM, compare each oos scenario with all 4 scenarios
+        # and record the smallest. Then have a data frame with how close each
+        # subset ESM can get to each scenario of the oos ESM.
+        oos %>%
+            left_join(coeff_sub_ESM %>%    
+                          select(-ensemble) %>%
+                          rename(subset_ESM = esm), 
+                      by = 'pc') %>%
+            group_by(esm, scenario, ensemble, subset_ESM) %>%
+            summarise(closest_L2 = min( sqrt(sum((value-ssp126)^2)),
+                                     sqrt(sum((value-ssp245)^2)),
+                                     sqrt(sum((value-ssp370)^2)),
+                                     sqrt(sum((value-ssp585)^2))))  %>%
+            ungroup %>% 
+            # Then fillter to just the closest on each scenario
+            group_by(esm, scenario, ensemble) %>%
+            filter(closest_L2 == min(closest_L2)) %>%
+            ungroup %>%
+            bind_rows(out, .) ->
+            out
+        
+        # If there is only one subset ESM that's closest for each scenario,
+        # obviously just pick that. But not sure where to go from there.
+
+    }
+}
+
+# take average L2 for all oos esms - that's the characteristic value for this
+# particular subset. Then pick the subset that has smallest characteristic value.
+
+mean(out$closest_L2)
+
+```
+
+- may be the case that from a stitches perspective, we want to block
+compare ESM to ESM (so concatenate experiments into super vector of coeff) but
+how to handle ESMs that don't have all the experiments for that comparison? if 
+ACCESS is the oos ESM and didn't do ssp245, we'd need to like find the ESM with 
+the 3 most similar experiments, not necessarily just exclude 245 from the chosen
+
+- but also even oos ESM has all 4 experiments, why should we necessarily care 
+about 245 being close to 245. Maybe 126 and 245 are close to 245 and that's fine.
+
+
+- ^ That's what I'm doing but Can convince myself either way - one oos ESM-Exp 
+combo being similar to one
+chosen ESM-Exp combo is enough for stitches to cover all behaviors; OR really
+need ESM to ESM comparison only
+
+
+
+# ESM selection
+
+Then we would be brute force looping over eligible combinations of 5 ESMs
+(have all 4 scenarios, maybe some criteria on number ensemble members, and 
+represent ECS distribution) and pick the one with
+either smallest vector differences = the axes are closest 
+or the smallest projection differences.
+
+
+- Con of either method: not suitable for in-filling if decide to add an extra 
+ESM but could probably be adapted? Like maybe we chose 5 so we want to see 
+what the best ESM to add as 6 conditional on the 5 we already have would be? 
+which may be different than the 6 best
+
+- 30 ESMs in list total, 8 have a missing experiment
+- 22 choose 5 = 26334 combinations (better than 30 choose 5, 142k)
+- we should aim to whittle down either on the front end by less than 22 - require
+some amount of ensemble members and/or represent ECS
+
+
+
+
+## functionalized
 
 ```{r}
 
 get_subset_data <- function(esmsubset, fulldata){
     as.data.frame(fulldata) %>%
-    mutate(temp = row.names(.)) %>%
-    separate(temp, into=c('esm', 'trash'), sep = '~', extra='merge') %>%
-    filter(esm %in% esmsubset) %>% 
-    select(-esm, -trash) %>%
-    as.matrix(.) ->
-    subdata
+        mutate(temp = row.names(.)) %>%
+        separate(temp, into=c('esm', 'trash'), sep = '~', extra='merge') %>%
+        filter(esm %in% esmsubset) %>% 
+        select(-esm, -trash) %>%
+        as.matrix(.) ->
+        subdata
+    
     return(subdata)
 }
 
-compare_eigenspaces <- function(fullpca_eigenspace, subsetdata, n_eigenvals = 5){
+compare_projection_coeffs <- function(fulldata, fullpca, subpca, n_eigenvalues = 5){
     
-    # eigenspace from the PCA
-    full_eigenval <- fullpca_eigenspace[[1]]
-    full_eigenvec <- fullpca_eigenspace[[2]]
-
+    # reconstruct the subdata in the space of first 5 eigenvectors of full data
+    recon_full <- project_pca(data = fulldata,
+                              pca = fullpca, 
+                              n_eigenvalues = n_eigenvalues)
     
-    sub_pca <- prcomp(subsetdata, center=TRUE, scale = TRUE) 
-    # eigenspace from the PCA
-    sub_eigenval <- data.frame(eigenvalues=(sub_pca$sdev)^2)
-    sub_eigenvec <- sub_pca$rotation
-    rm(sub_pca)
+    # reconstruct the subdata in the space of first 5 eigenvectors of sub data
+    recon_sub <- project_pca(data = fulldata,
+                             pca = subpca,
+                             n_eigenvalues = n_eigenvalues)
     
     
-    vec_diffs <- t(sapply(1:n_eigenvals, function(colindex){
-    data_frame(PC = colindex,
-               PC_distance = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex] - 
-                                           sub_eigenval[colindex,]*sub_eigenvec[,colindex] )^2)),
-               full_PC_length = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex])^2)),
-               sub_PC_length = sqrt(sum((sub_eigenval[colindex,]*sub_eigenvec[,colindex])^2))) %>%
-            mutate( normalized_distance = PC_distance/full_PC_length) ->
-        out
+    # compare reconstructions 
+    errs <- data.frame()
+    for (colindex in 1:ncol(recon_sub)){
+        sub <- recon_sub[, colindex]
+        full <- recon_full[,colindex]
         
-        return(out)
-        }))
+        bind_rows(data.frame(id = colnames(recon_sub)[colindex]) %>%
+                      mutate(rms = sqrt(sum((sub - full)^2)) ,
+                             nrms = rms /sqrt(sum((full)^2))) ,
+                  errs) ->
+            errs
+        } 
     
-    return(vecdiffs)
+    errs %>%
+        separate(id, into = c('esm', 'scenario', 'ensemble'), sep ='~')  %>%
+        group_by(esm) %>%
+        summarize(avg_nrms_across_exps = mean(nrms)) %>%
+        ungroup ->
+        nrms
+    
+    return(data.frame(avg_nrms_across_esms = mean(nrms$avg_nrms_across_exps)))
 }
 
-loop_over_subsets <- function(){}
-identify_subsets <- function(fulldata){}
+full_pca_distances <- function(subset_esms, fullpca, n_eigenvalues = 5){
+
+    coeff <- as.data.frame(fullpca$x[,1:n_eigenvalues])
+    
+    # reshape so have info by ESM and experiment
+    coeff %>%
+        mutate(id = row.names(.)) %>%
+        separate(id, into = c('esm', 'scenario', 'ensemble'), sep ='~') %>%
+        gather(pc, value, -esm, -scenario, -ensemble) -> # %>%
+        # spread(scenario, value) ->
+        coeff_all_ESM
+    
+    # pull off the subset coefficients into their own DF for comparison
+    coeff_all_ESM %>%
+        filter(esm %in% subset_esms)  %>%
+        spread(scenario, value) ->
+        coeff_sub_ESM
+    
+    out <- data.frame()
+    for (esmname in unique(coeff_all_ESM$esm)){
+        
+        # only calculate for oos ESMs
+        if(!(esmname %in% subset_esms)){
+            
+            coeff_all_ESM %>%
+                filter(esm == esmname) ->
+                oos 
+            
+            # For each subset ESM, compare each oos scenario with all 4 scenarios
+            # and record the smallest. Then have a data frame with how close each
+            # subset ESM can get to each scenario of the oos ESM.
+            oos %>%
+                left_join(coeff_sub_ESM %>%    
+                              select(-ensemble) %>%
+                              rename(subset_ESM = esm), 
+                          by = 'pc') %>%
+                group_by(esm, scenario, ensemble, subset_ESM) %>%
+                summarise(closest_L2 = min( sqrt(sum((value-ssp126)^2)),
+                                            sqrt(sum((value-ssp245)^2)),
+                                            sqrt(sum((value-ssp370)^2)),
+                                            sqrt(sum((value-ssp585)^2))))  %>%
+                ungroup %>% 
+                # Then fillter to just the closest on each scenario
+                group_by(esm, scenario, ensemble) %>%
+                filter(closest_L2 == min(closest_L2)) %>%
+                ungroup %>%
+                bind_rows(out, .) ->
+                out
+            # If there is only one subset ESM that's closest for each scenario,
+            # obviously just pick that. But not sure where to go from there.
+            }        # end calculation for each subset esm
+        
+        } # end loop over all ESMs
+    
+    # take average L2 for all oos esms - that's the characteristic value for this
+    # particular subset. Then pick the subset that has smallest characteristic value.
+    
+    return(data.frame(avg_closest_L2 = mean(out$closest_L2)))
+    
+}
+
+
 ########
-    full_eigenval <- data.frame(eigenvalues=(full_pca$sdev)^2)
-    full_eigenvec <- full_pca$rotation
+
+# test functions
+compare_projection_coeffs(fulldata = full_data,
+                          fullpca = full_pca,
+                          subpca = sub_pca,
+                          n_eigenvalues = 5)
+full_pca_distances(subset_esms = subset,
+                   fullpca = full_pca,
+                   n_eigenvalues = 5)
+
+
 ```
 
