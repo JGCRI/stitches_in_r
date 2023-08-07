@@ -1484,6 +1484,33 @@ border-radius: 0px;
 </div>
 
 
+<div id="goal" class="section level1">
+<h1>Goal</h1>
+<p>from a selection of possible subset/chosen ESMs, come up with a
+metric for each of thoes subsets that says how good the subset is at
+representing the ‘truth’ that is the PCA of all of the CMIP6 data.</p>
+<p>Then select the subset of ESMs with the smallest value for that
+metric and those are our ‘curated archive’ ESMs.</p>
+<p>Work below covers 2 different metrics:</p>
+<ol style="list-style-type: decimal">
+<li>The projection of all CMIP6 data into the first N eigenvectors from
+the PCA of all data vs projection of all CMIP6 data into the first N
+eigenvectors from the PCA of the subset data. Calculate NRMS between
+those two projections for each CMIP6 esmXscenario. Metric is the average
+value of all of those NRMS’s.</li>
+</ol>
+<ul>
+<li>saying for each subset of 5 ESMs, how similar is all CMIP6 data
+projected into that subset’s space vs projected into the ‘true’
+space</li>
+</ul>
+<ol start="2" style="list-style-type: decimal">
+<li>The coefficients of all CMIP6 data into the first N eigenvectors
+from the PCA of all data. For each of the OOS esmXscenarios, calculate
+the L2 distance between that and each esmXscenario in the subset
+data</li>
+</ol>
+</div>
 <div id="set-up" class="section level1">
 <h1>set up</h1>
 <p>And some package and labeling info</p>
@@ -1507,10 +1534,11 @@ metrics_write_dir &lt;-  &#39;extracted_timeseries/extracted_metrics/&#39;
 
 # strawman subset of ESMs from our original 12, have all 4 experiments each
 subset &lt;- c(&#39;CAMS-CSM1-0&#39; , &#39;FGOALS-g3&#39;, &#39;MRI-ESM2-0&#39; ,&#39;CESM2-WACCM&#39;, &#39;CanESM5&#39;)
+subset2 &lt;- c(&#39;CAMS-CSM1-0&#39; , &#39;FGOALS-g3&#39;, &#39;MRI-ESM2-0&#39; ,&#39;CESM2-WACCM&#39;, &#39;UKESM1-0-LL&#39;)
             
 
 # ESMS that dont have 4 experiments
-non_candidate_esm &lt;- c(&quot;E3SM-1-1&quot;, &quot;FIO-ESM-2-0&quot;, &quot;GFDL-CM4&quot;, &quot;IITM-ESM&quot;,
+non_candidate_esm &lt;- c(&quot;CIESM&quot;, &quot;E3SM-1-1&quot;, &quot;FIO-ESM-2-0&quot;, &quot;GFDL-CM4&quot;, &quot;IITM-ESM&quot;,
                        &quot;IPSL-CM5A2-INCA&quot;, &quot;KIOST-ESM&quot;, &quot;NESM3&quot;, &quot;NorESM2-LM&quot;)</code></pre>
 </div>
 <div id="load-esm-data-thats-been-processed" class="section level1">
@@ -1608,230 +1636,9 @@ shaped_data &lt;- lapply(grouped_data, function(group){
     }
     
     }
-)</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;experiment&#39;, &#39;type&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre class="r"><code># combine columns but then transpose because prcomp wants rows to be observations 
+)
+
+# combine columns but then transpose because prcomp wants rows to be observations 
 # and columns to be variables (but doing it the other way first is easier to code)
 full_data &lt;- t(do.call(cbind, shaped_data) )
 
@@ -1843,7 +1650,7 @@ print(&#39;removed rows due to missing data&#39;)</code></pre>
 <pre class="r"><code>print(row.names(full_data)[c(which(!(row.names(full_data) %in% row.names(full_data1))))])</code></pre>
 <pre><code>## [1] &quot;CIESM~ssp126~ensemble_avg&quot;      &quot;CIESM~ssp245~ensemble_avg&quot;     
 ## [3] &quot;CIESM~ssp585~ensemble_avg&quot;      &quot;NorESM2-LM~ssp585~ensemble_avg&quot;</code></pre>
-<pre class="r"><code>full_data &lt;- full_data1 
+<pre class="r"><code>full_data &lt;- as.data.frame(full_data1)
 rm(full_data1)</code></pre>
 <p>And the subsetted ESMs</p>
 <pre class="r"><code>as.data.frame(full_data) %&gt;%
@@ -1925,66 +1732,18 @@ psub</code></pre>
 </div>
 <div id="compare-subset-pca-space-with-full-pca-space" class="section level1">
 <h1>Compare subset PCA space with full PCA space</h1>
-<div id="differences-of-the-eigenvectors" class="section level2">
-<h2>Differences of the eigenvectors</h2>
-<pre class="r"><code>data.frame(full_eigenval = full_eigenval[1:5,],
-           sub_eigenval = sub_eigenval[1:5,]) -&gt;
-    eigenval_compare
-
-
-print(eigenval_compare)</code></pre>
-<pre><code>##   full_eigenval sub_eigenval
-## 1     100.38131    124.08924
-## 2      36.58892     56.27407
-## 3      18.17984     29.12740
-## 4      14.22995     18.06727
-## 5      10.38925     13.12603</code></pre>
-<pre class="r"><code>full_vec &lt;- full_eigenvec[, 1:5]
-sub_vec &lt;- sub_eigenvec[, 1:5]
-
-vec_diffs &lt;- t(sapply(1:6, function(colindex){
-    data_frame(PC = colindex,
-               PC_distance = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex] - 
-                                           sub_eigenval[colindex,]*sub_eigenvec[,colindex] )^2)),
-               full_PC_length = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex])^2)),
-               sub_PC_length = sqrt(sum((sub_eigenval[colindex,]*sub_eigenvec[,colindex])^2))) -&gt;
-        out
-    return(out)
-}))</code></pre>
-<pre><code>## Warning: `data_frame()` was deprecated in tibble 1.1.0.
-## ℹ Please use `tibble()` instead.
-## This warning is displayed once every 8 hours.
-## Call `lifecycle::last_lifecycle_warnings()` to see where this warning was
-## generated.</code></pre>
-<pre class="r"><code>vec_diffs</code></pre>
-<pre><code>##      PC PC_distance full_PC_length sub_PC_length
-## [1,] 1  222.7211    100.3813       124.0892     
-## [2,] 2  25.66629    36.58892       56.27407     
-## [3,] 3  18.01015    18.17984       29.1274      
-## [4,] 4  30.73638    14.22995       18.06727     
-## [5,] 5  16.94234    10.38925       13.12603     
-## [6,] 6  10.77483    9.277844       4.671874</code></pre>
-</div>
-<div id="or-differences-in-the-projections-of-the-same-data" class="section level2">
-<h2>or differences in the projections of the same data</h2>
-<p>We’ve picked our subset of ESMs, so we could project each observation
-of the ESM into</p>
+<div id="differences-in-the-projections-of-the-same-data" class="section level2">
+<h2>differences in the projections of the same data</h2>
+<p>We’ve picked our subset of ESMs, so we project each available CMIP6
+data row into:</p>
 <ol style="list-style-type: decimal">
 <li>the first 5 eigenvectors of the full data</li>
 <li>the first 5 eigenvectors of the subset data</li>
 </ol>
 <p>Then compare those projections.</p>
-<p>Q - out of sample ESMS tho?</p>
-<p>-&gt; for all 107 observations, would have to project and do the
-difference, for every combination of 5 ESMs</p>
-<ul>
-<li><p>replace <code>subdata</code> with <code>full_data</code> in
-following block</p></li>
-<li><p>then this will be repeated for every combination of 5
-ESMs</p></li>
-</ul>
-<p>Then pick the combo of 5 ESMs based on minimizing error…for all
-observations? for an ESM care about?</p>
+<p>then this will be repeated for every combination of 5 ESMs</p>
+<p>Then pick the combo of 5 ESMs based on minimizing error for all
+observations.</p>
 <ul>
 <li><p>Pro: don’t have to set a cutoff, can just select subset with
 smallest error</p></li>
@@ -2043,8 +1802,8 @@ mean(nrms$avg_nrms_across_exps)</code></pre>
 <pre><code>## [1] 0.558996</code></pre>
 </div>
 </div>
-<div id="compare-projections-in-full-pca-space" class="section level1">
-<h1>compare projections in full PCA space</h1>
+<div id="compare-coefficients-in-full-pca-space" class="section level1">
+<h1>compare coefficients in full PCA space</h1>
 <p>from the set of available coefficients in the full PCA space, select
 models whose coefficients span the space in the sense of:</p>
 <ul>
@@ -2109,173 +1868,9 @@ for (esmname in unique(coeff_all_ESM$esm)){
         # obviously just pick that. But not sure where to go from there.
 
     }
-}</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre><code>## Warning in left_join(., coeff_sub_ESM %&gt;% select(-ensemble) %&gt;% rename(subset_ESM = esm), : Detected an unexpected many-to-many relationship between `x` and `y`.
-## ℹ Row 1 of `x` matches multiple rows in `y`.
-## ℹ Row 1 of `y` matches multiple rows in `x`.
-## ℹ If a many-to-many relationship is expected, set `relationship =
-##   &quot;many-to-many&quot;` to silence this warning.</code></pre>
-<pre><code>## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.
-## `summarise()` has grouped output by &#39;esm&#39;, &#39;scenario&#39;, &#39;ensemble&#39;. You can
-## override using the `.groups` argument.</code></pre>
-<pre class="r"><code># take average L2 for all oos esms - that&#39;s the characteristic value for this
+}
+
+# take average L2 for all oos esms - that&#39;s the characteristic value for this
 # particular subset. Then pick the subset that has smallest characteristic value.
 
 mean(out$closest_L2)</code></pre>
@@ -2329,37 +1924,27 @@ ECS</p></li>
     return(subdata)
 }
 
-# # I think comparing projections makes more sense than eigenvectors
-# compare_eigenvectors &lt;- function(fullpca_eigenspace, subsetdata, n_eigenvals = 5){
-#     
-#     # eigenspace from the PCA
-#     full_eigenval &lt;- fullpca_eigenspace[[1]]
-#     full_eigenvec &lt;- fullpca_eigenspace[[2]]
-# 
-#     
-#     sub_pca &lt;- prcomp(subsetdata, center=TRUE, scale = TRUE) 
-#     # eigenspace from the PCA
-#     sub_eigenval &lt;- data.frame(eigenvalues=(sub_pca$sdev)^2)
-#     sub_eigenvec &lt;- sub_pca$rotation
-#     rm(sub_pca)
-#     
-#     
-#     vec_diffs &lt;- t(sapply(1:n_eigenvals, function(colindex){
-#     data_frame(PC = colindex,
-#                PC_distance = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex] - 
-#                                            sub_eigenval[colindex,]*sub_eigenvec[,colindex] )^2)),
-#                full_PC_length = sqrt(sum((full_eigenval[colindex,]*full_eigenvec[,colindex])^2)),
-#                sub_PC_length = sqrt(sum((sub_eigenval[colindex,]*sub_eigenvec[,colindex])^2))) %&gt;%
-#             mutate( normalized_distance = PC_distance/full_PC_length) -&gt;
-#         out
-#         
-#         return(out)
-#         }))
-#     
-#     return(vecdiffs)
-# }
 
-compare_projection_coeffs &lt;- function(fulldata, fullpca, subpca, n_eigenvalues = 5){
+project_pca &lt;- function(data, pca, n_eigenvalues=5){
+    
+    # don&#39;t need this for full data on full pca, could just do pca$x[,1:n]
+    # but for full data on sub pca, do need this:
+    coeff &lt;- scale(data, pca$center, pca$scale) %*% pca$rotation[,1:n_eigenvalues]
+    
+    reconstructions &lt;- sapply(1:nrow(data), function(rowindex){
+        reconstructed &lt;- rowSums(sweep(pca$rotation[,1:n_eigenvalues], 
+                                       MARGIN=2,
+                                       coeff[rowindex,],
+                                       `*`))
+        return(reconstructed)
+    })
+    
+    colnames(reconstructions) &lt;- rownames(data)
+    return(reconstructions)
+}
+
+
+compare_projections &lt;- function(fulldata, fullpca, subpca, n_eigenvalues = 5){
     
     # reconstruct the subdata in the space of first 5 eigenvectors of full data
     recon_full &lt;- project_pca(data = fulldata,
@@ -2457,8 +2042,169 @@ full_pca_distances &lt;- function(subset_esms, fullpca, n_eigenvalues = 5){
 }
 
 
-########</code></pre>
+########
+
+# test functions
+suppressMessages(compare_projections(fulldata = full_data,
+                          fullpca = full_pca,
+                          subpca = sub_pca,
+                          n_eigenvalues = 5))</code></pre>
+<pre><code>##   avg_nrms_across_esms
+## 1             0.558996</code></pre>
+<pre class="r"><code>suppressWarnings(suppressMessages(full_pca_distances(subset_esms = subset,
+                   fullpca = full_pca,
+                   n_eigenvalues = 5)))</code></pre>
+<pre><code>##   avg_closest_L2
+## 1       6.611159</code></pre>
 </div>
+</div>
+<div id="test" class="section level1">
+<h1>Test</h1>
+<p>Would load all the regional metric, reshape, do full PCA still.</p>
+<p>Then suppose we have labeled subsets</p>
+<pre class="r"><code>table_of_subsets &lt;- bind_rows(data.frame(subset_id = rep(&#39;subset1&#39;, 5),
+                                         subset = subset),
+                              data.frame(subset_id = rep(&#39;subset2&#39;, 5),
+                                         subset = subset2))
+knitr::kable(table_of_subsets)</code></pre>
+<table>
+<thead>
+<tr class="header">
+<th align="left">subset_id</th>
+<th align="left">subset</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">subset1</td>
+<td align="left">CAMS-CSM1-0</td>
+</tr>
+<tr class="even">
+<td align="left">subset1</td>
+<td align="left">FGOALS-g3</td>
+</tr>
+<tr class="odd">
+<td align="left">subset1</td>
+<td align="left">MRI-ESM2-0</td>
+</tr>
+<tr class="even">
+<td align="left">subset1</td>
+<td align="left">CESM2-WACCM</td>
+</tr>
+<tr class="odd">
+<td align="left">subset1</td>
+<td align="left">CanESM5</td>
+</tr>
+<tr class="even">
+<td align="left">subset2</td>
+<td align="left">CAMS-CSM1-0</td>
+</tr>
+<tr class="odd">
+<td align="left">subset2</td>
+<td align="left">FGOALS-g3</td>
+</tr>
+<tr class="even">
+<td align="left">subset2</td>
+<td align="left">MRI-ESM2-0</td>
+</tr>
+<tr class="odd">
+<td align="left">subset2</td>
+<td align="left">CESM2-WACCM</td>
+</tr>
+<tr class="even">
+<td align="left">subset2</td>
+<td align="left">UKESM1-0-LL</td>
+</tr>
+</tbody>
+</table>
+<pre class="r"><code>rm(subset)
+rm(subset2)
+rm(subdata)
+rm(sub_pca)</code></pre>
+<p>For each subset, calculate the two metrics.</p>
+<pre class="r"><code>metrics &lt;- data.frame()
+
+for (subsetid in unique(table_of_subsets$subset_id)){
+    
+    subset &lt;- table_of_subsets[table_of_subsets[&#39;subset_id&#39;]==subsetid,]$subset
+
+    get_subset_data(esmsubset = subset,
+                    fulldata = full_data) -&gt;
+        subdata
+    
+    sub_pca &lt;- prcomp(subdata, center=TRUE, scale = TRUE)
+    
+    data.frame(subset_id = subsetid,
+               projection_metric = compare_projections(fulldata = full_data,
+                                                       fullpca = full_pca,
+                                                       subpca = sub_pca,
+                                                       n_eigenvalues = 5),
+               coeff_metric = full_pca_distances(subset_esms = subset,
+                                                 fullpca = full_pca,
+                                                 n_eigenvalues = 5)) %&gt;%
+        bind_rows(metrics, .)-&gt;
+        metrics
+               
+    rm(subset)
+    rm(subdata)
+    rm(sub_pca)
+    
+}
+
+write.csv(metrics, &#39;esm_subsets_metrics.csv&#39;, row.names = FALSE)</code></pre>
+</div>
+<div id="all-subsets" class="section level1">
+<h1>all subsets</h1>
+<pre class="r"><code>nESMs &lt;- 5
+
+region_summary %&gt;%
+    select(esm) %&gt;%
+    distinct %&gt;% 
+    filter(!(esm %in% non_candidate_esm)) -&gt;
+    df
+
+as.data.frame(t(apply(combn(nrow(df), nESMs), 
+                      2, function(i) df[i,])
+                )
+              ) %&gt;%
+    mutate(subset_id = paste0(&#39;subset&#39;, as.integer(row.names(.)))) %&gt;%
+    gather(trash, subset, -subset_id) %&gt;%
+    select(-trash) %&gt;%
+    arrange(subset_id) -&gt;
+    table_of_subsets
+write.csv(table_of_subsets, &#39;subsets_22choose5.csv&#39;, row.names = FALSE)
+
+
+metrics &lt;- data.frame()
+
+for (subsetid in unique(table_of_subsets$subset_id)){
+    
+    subset &lt;- table_of_subsets[table_of_subsets[&#39;subset_id&#39;]==subsetid,]$subset
+
+    get_subset_data(esmsubset = subset,
+                    fulldata = full_data) -&gt;
+        subdata
+    
+    sub_pca &lt;- prcomp(subdata, center=TRUE, scale = TRUE)
+    
+    data.frame(subset_id = subsetid,
+               projection_metric = compare_projections(fulldata = full_data,
+                                                       fullpca = full_pca,
+                                                       subpca = sub_pca,
+                                                       n_eigenvalues = 5),
+               coeff_metric = full_pca_distances(subset_esms = subset,
+                                                 fullpca = full_pca,
+                                                 n_eigenvalues = 5)) %&gt;%
+        bind_rows(metrics, .)-&gt;
+        metrics
+               
+    rm(subset)
+    rm(subdata)
+    rm(sub_pca)
+    
+}
+
+write.csv(metrics, &#39;esm_subsets_metrics_22choose5.csv&#39;, row.names = FALSE)</code></pre>
 </div>
 
 

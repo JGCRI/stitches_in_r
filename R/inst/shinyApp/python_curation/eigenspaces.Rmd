@@ -49,10 +49,11 @@ metrics_write_dir <-  'extracted_timeseries/extracted_metrics/'
 
 # strawman subset of ESMs from our original 12, have all 4 experiments each
 subset <- c('CAMS-CSM1-0' , 'FGOALS-g3', 'MRI-ESM2-0' ,'CESM2-WACCM', 'CanESM5')
+subset2 <- c('CAMS-CSM1-0' , 'FGOALS-g3', 'MRI-ESM2-0' ,'CESM2-WACCM', 'UKESM1-0-LL')
             
 
 # ESMS that dont have 4 experiments
-non_candidate_esm <- c("E3SM-1-1", "FIO-ESM-2-0", "GFDL-CM4", "IITM-ESM",
+non_candidate_esm <- c("CIESM", "E3SM-1-1", "FIO-ESM-2-0", "GFDL-CM4", "IITM-ESM",
                        "IPSL-CM5A2-INCA", "KIOST-ESM", "NESM3", "NorESM2-LM")
             
 ```
@@ -78,7 +79,7 @@ print(head(region_summary))
 
 # Prep data for PCA
 
-```{r}
+```{r, warning=FALSE, message=FALSE}
 # reshape:
 grouped_data <- split(region_summary, list(region_summary$esm, region_summary$experiment))
 grouped_data <- grouped_data[sapply(grouped_data, function(x) dim(x)[1]) > 0]
@@ -150,7 +151,7 @@ print('removed rows due to missing data')
 print(row.names(full_data)[c(which(!(row.names(full_data) %in% row.names(full_data1))))])
 
 
-full_data <- full_data1 
+full_data <- as.data.frame(full_data1)
 rm(full_data1)
 ```
 
@@ -271,7 +272,7 @@ Then pick the combo of 5 ESMs based on minimizing error for all observations.
 
 - con: a lot of calculations
 
-```{r}
+```{r, warning=FALSE, message=FALSE}
 
 # project new data onto the PCA space
 #TODO double check with fresher eyes
@@ -343,7 +344,7 @@ calculations
 
 - Con: have to decide on a cutoff
 
-```{r}
+```{r, warning=FALSE, message=FALSE}
 n_eigenvalues <- 5
 
 
@@ -463,7 +464,27 @@ get_subset_data <- function(esmsubset, fulldata){
     return(subdata)
 }
 
-compare_projection_coeffs <- function(fulldata, fullpca, subpca, n_eigenvalues = 5){
+
+project_pca <- function(data, pca, n_eigenvalues=5){
+    
+    # don't need this for full data on full pca, could just do pca$x[,1:n]
+    # but for full data on sub pca, do need this:
+    coeff <- scale(data, pca$center, pca$scale) %*% pca$rotation[,1:n_eigenvalues]
+    
+    reconstructions <- sapply(1:nrow(data), function(rowindex){
+        reconstructed <- rowSums(sweep(pca$rotation[,1:n_eigenvalues], 
+                                       MARGIN=2,
+                                       coeff[rowindex,],
+                                       `*`))
+        return(reconstructed)
+    })
+    
+    colnames(reconstructions) <- rownames(data)
+    return(reconstructions)
+}
+
+
+compare_projections <- function(fulldata, fullpca, subpca, n_eigenvalues = 5){
     
     # reconstruct the subdata in the space of first 5 eigenvectors of full data
     recon_full <- project_pca(data = fulldata,
@@ -564,14 +585,134 @@ full_pca_distances <- function(subset_esms, fullpca, n_eigenvalues = 5){
 ########
 
 # test functions
-compare_projection_coeffs(fulldata = full_data,
+suppressMessages(compare_projections(fulldata = full_data,
                           fullpca = full_pca,
                           subpca = sub_pca,
-                          n_eigenvalues = 5)
-full_pca_distances(subset_esms = subset,
+                          n_eigenvalues = 5))
+
+suppressWarnings(suppressMessages(full_pca_distances(subset_esms = subset,
                    fullpca = full_pca,
-                   n_eigenvalues = 5)
+                   n_eigenvalues = 5)))
+
+```
+
+
+# Test
+
+Would load all the regional metric, reshape, do full PCA still.
+
+Then suppose we have labeled subsets
+
+```{r, warning=FALSE, message=FALSE}
+table_of_subsets <- bind_rows(data.frame(subset_id = rep('subset1', 5),
+                                         subset = subset),
+                              data.frame(subset_id = rep('subset2', 5),
+                                         subset = subset2))
+knitr::kable(table_of_subsets)
+
+rm(subset)
+rm(subset2)
+rm(subdata)
+rm(sub_pca)
+```
+
+For each subset, calculate the two metrics. 
+
+```{r, warning=FALSE, message=FALSE}
+
+metrics <- data.frame()
+
+for (subsetid in unique(table_of_subsets$subset_id)){
+    
+    subset <- table_of_subsets[table_of_subsets['subset_id']==subsetid,]$subset
+
+    get_subset_data(esmsubset = subset,
+                    fulldata = full_data) ->
+        subdata
+    
+    sub_pca <- prcomp(subdata, center=TRUE, scale = TRUE)
+    
+    data.frame(subset_id = subsetid,
+               projection_metric = compare_projections(fulldata = full_data,
+                                                       fullpca = full_pca,
+                                                       subpca = sub_pca,
+                                                       n_eigenvalues = 5),
+               coeff_metric = full_pca_distances(subset_esms = subset,
+                                                 fullpca = full_pca,
+                                                 n_eigenvalues = 5)) %>%
+        bind_rows(metrics, .)->
+        metrics
+               
+    rm(subset)
+    rm(subdata)
+    rm(sub_pca)
+    
+}
+
+write.csv(metrics, 'esm_subsets_metrics.csv', row.names = FALSE)
+```
+
+
+
+
+
+# all subsets
+
+
+```{r, eval=FALSE}
+nESMs <- 5
+
+region_summary %>%
+    select(esm) %>%
+    distinct %>% 
+    filter(!(esm %in% non_candidate_esm)) ->
+    df
+
+as.data.frame(t(apply(combn(nrow(df), nESMs), 
+                      2, function(i) df[i,])
+                )
+              ) %>%
+    mutate(subset_id = paste0('subset', as.integer(row.names(.)))) %>%
+    gather(trash, subset, -subset_id) %>%
+    select(-trash) %>%
+    arrange(subset_id) ->
+    table_of_subsets
+write.csv(table_of_subsets, 'subsets_22choose5.csv', row.names = FALSE)
+
+
+metrics <- data.frame()
+
+for (subsetid in unique(table_of_subsets$subset_id)){
+    
+    subset <- table_of_subsets[table_of_subsets['subset_id']==subsetid,]$subset
+
+    get_subset_data(esmsubset = subset,
+                    fulldata = full_data) ->
+        subdata
+    
+    sub_pca <- prcomp(subdata, center=TRUE, scale = TRUE)
+    
+    data.frame(subset_id = subsetid,
+               projection_metric = compare_projections(fulldata = full_data,
+                                                       fullpca = full_pca,
+                                                       subpca = sub_pca,
+                                                       n_eigenvalues = 5),
+               coeff_metric = full_pca_distances(subset_esms = subset,
+                                                 fullpca = full_pca,
+                                                 n_eigenvalues = 5)) %>%
+        bind_rows(metrics, .)->
+        metrics
+               
+    rm(subset)
+    rm(subdata)
+    rm(sub_pca)
+    
+}
+
+write.csv(metrics, 'esm_subsets_metrics_22choose5.csv', row.names = FALSE)
+
 
 
 ```
+
 
