@@ -810,6 +810,28 @@ p4 <- ggplot(coordinates) +
 gridExtra::grid.arrange(p3, p4)
 ```
 
+
+### PC3 vs PC4
+
+```{r, fig.height=8, fig.width=10}
+
+
+gridExtra::grid.arrange(ggplot(coordinates) +
+    geom_point(mapping = aes(x = PC3, y = PC4, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = PC3, y = PC4, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
+    ggplot(coordinates) +
+    geom_point(mapping = aes(x = PC3, y = PC4, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = PC3, y = PC4, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'))
+
+
+```
+
 # notes
 
 So this seems like a spot where some heuristics might be helpful.
@@ -920,6 +942,27 @@ gridExtra::grid.arrange(ggplot(coordinates) +
     geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
                mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'))
+
+
+```
+
+### PC3 vs PC4
+
+```{r, fig.height=8, fig.width=10}
+
+
+gridExtra::grid.arrange(ggplot(coordinates) +
+    geom_point(mapping = aes(x = PC3, y = PC4, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = PC3, y = PC4, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
+    ggplot(coordinates) +
+    geom_point(mapping = aes(x = PC3, y = PC4, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = PC3, y = PC4, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'))
 
