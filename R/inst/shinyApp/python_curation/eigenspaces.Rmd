@@ -28,8 +28,14 @@ CMIP6 esmXscenario. Metric is the average value of all of those NRMS's.
 into that subset's space vs projected into the 'true' space 
 
 2. The coefficients of all CMIP6 data into the first N eigenvectors from the PCA
-of all data. For each of the OOS esmXscenarios, calculate the L2 distance 
-between that and each esmXscenario in the subset data
+of all data. For each of the OOS esmXscenarios, for each subset ESM, calculate 
+the smallest L2 distance from the coefficients across the subset ESM's scenarios=
+how close each subset ESM can get to every out of sample data point. Then take
+the minimum across subset ESMs = how close the selected subset can get to each
+OOS data point. The average of that distance from all OOS data points is then
+the metric for that subset.
+
+- could weight by amount of variance explained by each dimension.
 
 
 # set up
@@ -562,7 +568,8 @@ full_pca_distances <- function(subset_esms, fullpca, n_eigenvalues = 5){
                                             sqrt(sum((value-ssp370)^2)),
                                             sqrt(sum((value-ssp585)^2))))  %>%
                 ungroup %>% 
-                # Then fillter to just the closest on each scenario
+                # Then filter to just the closest of any subset ESM
+                # on each oos scenario
                 group_by(esm, scenario, ensemble) %>%
                 filter(closest_L2 == min(closest_L2)) %>%
                 ungroup %>%
@@ -681,7 +688,7 @@ write.csv(table_of_subsets, 'subsets_22choose5.csv', row.names = FALSE)
 
 
 metrics <- data.frame()
-
+    
 for (subsetid in unique(table_of_subsets$subset_id)){
     
     subset <- table_of_subsets[table_of_subsets['subset_id']==subsetid,]$subset
@@ -693,13 +700,13 @@ for (subsetid in unique(table_of_subsets$subset_id)){
     sub_pca <- prcomp(subdata, center=TRUE, scale = TRUE)
     
     data.frame(subset_id = subsetid,
-               projection_metric = compare_projections(fulldata = full_data,
+               projection_metric = suppressMessages(compare_projections(fulldata = full_data,
                                                        fullpca = full_pca,
                                                        subpca = sub_pca,
-                                                       n_eigenvalues = 5),
-               coeff_metric = full_pca_distances(subset_esms = subset,
+                                                       n_eigenvalues = 5)),
+               coeff_metric = suppressWarnings(suppressMessages(full_pca_distances(subset_esms = subset,
                                                  fullpca = full_pca,
-                                                 n_eigenvalues = 5)) %>%
+                                                 n_eigenvalues = 5)))) %>%
         bind_rows(metrics, .)->
         metrics
                
@@ -711,8 +718,249 @@ for (subsetid in unique(table_of_subsets$subset_id)){
 
 write.csv(metrics, 'esm_subsets_metrics_22choose5.csv', row.names = FALSE)
 
+```
+
+# Take a look at minimizing sets of ESMs
+
+```{r}
+metrics <- read.csv('esm_subsets_metrics_22choose5.csv') %>%
+    rename(projection_metric = avg_nrms_across_esms,
+           coefficient_metric = avg_closest_L2)
+table_of_subsets <- read.csv('subsets_22choose5.csv')
+
+
+
+# Subset that is minimum in the projection metric
+metrics %>%
+    filter(projection_metric == min(projection_metric)) %>%
+    left_join(table_of_subsets, by = c('subset_id')) ->
+    projection_min
+
+metrics %>%
+    filter(coefficient_metric == min(coefficient_metric)) %>%
+    left_join(table_of_subsets, by = c('subset_id')) ->
+    coefficient_min
+
+knitr::kable(projection_min)
+
+knitr::kable(coefficient_min)
+
+```
+
+## plotting in full PCA space
+
+```{r}
+
+full_pca$x %>%
+  as.data.frame() %>%
+  mutate(id = row.names(.)) %>%
+  separate(id, into=c('model', 'scenario', 'ensemble'), sep = '~') %>%
+  select(model, scenario, PC1, PC2, PC3, PC4, PC5, PC6, PC7, PC8, PC9)->
+  coordinates
+
+```
+
+
+
+### PC1 vs PC2
+
+```{r, fig.height = 8, fig.width=10}
+
+ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario))+
+    ggtitle('PCA of full data')
+
+p1 <- ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers')
+
+p2 <- ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers')
+
+gridExtra::grid.arrange(p1, p2)
+```
+
+
+### PC1 vs PC3
+
+```{r, fig.height=8, fig.width=10}
+
+
+p3 <- ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers')
+
+p4 <- ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers')
+
+gridExtra::grid.arrange(p3, p4)
+```
+
+# notes
+
+So this seems like a spot where some heuristics might be helpful.
+
+1. Throw out any subsets that have multiple models from the same lineage before
+pulling minimums
+
+2. Maybe don't accept any subsets with MRI
+
+3. Other heuristics, like ECS, number of ensemble members, variables.
+
+
+```{r}
+
+table_of_subsets %>%
+    group_by(subset_id) %>%
+    mutate(keep = if_else('MRI-ESM2-0' %in% subset, 0, 1)) %>%
+    ungroup %>%
+    filter(keep == 1) ->
+    table_of_subsets2
+
+
+metrics %>%
+    filter(subset_id %in% table_of_subsets2$subset_id) %>%
+    filter(projection_metric == min(projection_metric)) %>%
+    left_join(table_of_subsets, by = c('subset_id')) ->
+    projection_min
+
+metrics %>%
+    filter(subset_id %in% table_of_subsets2$subset_id) %>%
+    filter(coefficient_metric == min(coefficient_metric)) %>%
+    left_join(table_of_subsets, by = c('subset_id')) ->
+    coefficient_min
+
+knitr::kable(projection_min)
+
+knitr::kable(coefficient_min)
+
+```
+
+
+### PC1 vs PC2
+
+```{r, fig.height = 8, fig.width=10}
+
+
+gridExtra::grid.arrange(ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
+p1)
+
+gridExtra::grid.arrange(ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'),
+p2)
+
+
+gridExtra::grid.arrange(ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
+    ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'))
+```
+
+
+
+### PC1 vs PC3
+
+```{r, fig.height=8, fig.width=10}
+
+
+gridExtra::grid.arrange(ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
+p3)
+
+gridExtra::grid.arrange(ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'),
+p4)
+
+gridExtra::grid.arrange(ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
+    ggplot(coordinates) +
+    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'))
 
 
 ```
 
+
+# Validation
+
+- Hawkins and Sutton 09/Lehner2020: do for full data, do for final subset of ESMs
+and compare?
+
+From Lehner https://esd.copernicus.org/articles/11/491/2020/esd-11-491-2020.pdf
+
+- T and P globally and regionally over time; and gridded for time slices
+
+
+1. the model uncertainty M is calculated as the
+variance across the ensemble means of the seven SMILEs
+(i.e., across the forced responses of the SMILEs). 
+
+
+2. internal variability uncertainty I is calculated as the variance
+across ensemble members of a given SMILE, yielding one
+estimate of I per model. Prior to this calculation, time series are smoothed
+with the running mean corresponding to
+the target metric (here mostly decadal means). Averaging
+across the seven I values yields the multimodel mean internal variability
+uncertainty Imean. Alternatively, to explore the
+assumption that Imean does not change over time, we use the
+1950–2014 average value of Imean throughout the calculation
+(i.e., Ifixed). We also use the model with the largest and smallest I , i.e., 
+Imax and Imin, to quantify the e influence of model
+uncertainty in the estimate of I.
+
+
+3. Following HS09, we calculate S as the variance across the multimodel means 
+calculated for the different emissions scenarios, using a consistent
+set of available models.
+
+
+Then how do I want to apply that to our IPCC regional metrics (ideally) or the 
+full time series
 
