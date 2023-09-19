@@ -821,31 +821,34 @@ full_pca$x %>%
 
 ### all PCs
 
-```{r}
+```{r , fig.height=10, fig.width=12}
 coordinates %>%
     gather(pc_x, pc_x_val, -model, -scenario)  %>%
     left_join(coordinates %>% 
                   gather(pc_y, pc_y_val, -model, -scenario),
-               by = c('model', 'scenario')) ->
+               by = c('model', 'scenario'))  %>%
+    mutate(x_id = as.integer(substr(pc_x, nchar(pc_x), nchar(pc_x))),
+           y_id = as.integer(substr(pc_y, nchar(pc_y), nchar(pc_y)))) %>%
+    filter(y_id > x_id) ->
     grid_plot
 
 
 ggplot(data = grid_plot) +
     geom_point(mapping = aes(x = pc_x_val, y = pc_y_val,
-                             color = model, shape = scenario)) +
+                             color = model, shape = scenario), size = 0.5) +
      geom_point(data = grid_plot %>% filter(model %in% projection_min$subset),
                mapping = aes(x = pc_x_val, y = pc_y_val, color = model, shape = scenario),
-               size = 4) +
+               size = 2) +
     ggtitle('PCA of full data, projection metric minimizers') +
     facet_grid(pc_y ~ pc_x)
 
 
 ggplot(data = grid_plot) +
     geom_point(mapping = aes(x = pc_x_val, y = pc_y_val,
-                             color = model, shape = scenario)) +
+                             color = model, shape = scenario), size = 0.5) +
      geom_point(data = grid_plot %>% filter(model %in% coefficient_min$subset),
                mapping = aes(x = pc_x_val, y = pc_y_val, color = model, shape = scenario),
-               size = 4) +
+               size = 2) +
     ggtitle('PCA of full data, coefficient metric minimizers') +
     facet_grid(pc_y ~ pc_x)
 
@@ -900,143 +903,6 @@ p4 <- ggplot(coordinates) +
 gridExtra::grid.arrange(p3, p4)
 ```
 
-
-### PC3 vs PC4
-
-```{r, fig.height=8, fig.width=10}
-
-
-gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = PC3, y = PC4, color = model, shape = scenario)) +
-    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
-               mapping = aes(x = PC3, y = PC4, color = model, shape = scenario),
-               size = 4) +
-    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
-    ggplot(coordinates) +
-    geom_point(mapping = aes(x = PC3, y = PC4, color = model, shape = scenario)) +
-    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
-               mapping = aes(x = PC3, y = PC4, color = model, shape = scenario),
-               size = 4) +
-    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'))
-
-
-```
-
-# notes
-
-So this seems like a spot where some heuristics might be helpful.
-
-1. Throw out any subsets that have multiple models from the same lineage before
-pulling minimums
-
-2. Maybe don't accept any subsets with MRI
-
-3. Other heuristics, like ECS, number of ensemble members, variables.
-
-
-```{r}
-
-table_of_subsets %>%
-    group_by(subset_id) %>%
-    mutate(keep = if_else('MRI-ESM2-0' %in% subset, 0, 1)) %>%
-    ungroup %>%
-    filter(keep == 1) ->
-    table_of_subsets2
-
-
-metrics %>%
-    filter(subset_id %in% table_of_subsets2$subset_id) %>%
-    filter(projection_metric == min(projection_metric)) %>%
-    left_join(table_of_subsets, by = c('subset_id')) ->
-    projection_min
-
-metrics %>%
-    filter(subset_id %in% table_of_subsets2$subset_id) %>%
-    filter(coefficient_metric == min(coefficient_metric)) %>%
-    left_join(table_of_subsets, by = c('subset_id')) ->
-    coefficient_min
-
-knitr::kable(projection_min)
-
-knitr::kable(coefficient_min)
-
-```
-
-
-### PC1 vs PC2
-
-```{r, fig.height = 8, fig.width=10}
-
-
-gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
-    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
-               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
-               size = 4) +
-    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
-p1)
-
-gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
-    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
-               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
-               size = 4) +
-    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'),
-p2)
-
-
-gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
-    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
-               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
-               size = 4) +
-    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
-    ggplot(coordinates) +
-    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
-    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
-               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
-               size = 4) +
-    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'))
-```
-
-
-
-### PC1 vs PC3
-
-```{r, fig.height=8, fig.width=10}
-
-
-gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
-    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
-               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
-               size = 4) +
-    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
-p3)
-
-gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
-    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
-               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
-               size = 4) +
-    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'),
-p4)
-
-gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
-    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
-               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
-               size = 4) +
-    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
-    ggplot(coordinates) +
-    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
-    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
-               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
-               size = 4) +
-    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'))
-
-
-```
 
 ### PC3 vs PC4
 
