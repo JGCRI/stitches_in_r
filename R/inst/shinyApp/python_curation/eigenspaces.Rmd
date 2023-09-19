@@ -723,14 +723,44 @@ write.csv(metrics, 'esm_subsets_metrics_22choose5.csv', row.names = FALSE)
 # Take a look at minimizing sets of ESMs
 
 ```{r}
+# Metrics for every subset with IDs
 metrics <- read.csv('esm_subsets_metrics_22choose5.csv') %>%
     rename(projection_metric = avg_nrms_across_esms,
            coefficient_metric = avg_closest_L2)
-table_of_subsets <- read.csv('subsets_22choose5.csv')
+
+# Table of all subsets with IDs
+table_of_subsets <- read.csv('subsets_22choose5.csv') 
+table_of_subsets %>%
+    mutate(mod = as.integer(row.names(.)) %% 5,
+           esm=paste0('esm', mod)) %>% 
+    select(-mod) %>% 
+    spread(esm, subset) %>% 
+    mutate(id = paste(esm1, esm2, esm3, esm4, esm0, sep='~')) ->
+    table_of_subsets2
+
+# Table of ECS preserving subsets
+ecs_subsets <- read.csv("five_sample_esm_climate_sensitivity.csv", stringsAsFactors = F)
+ecs_subsets %>%
+    mutate(id = paste(esm1, esm2, esm3, esm4, esm5, sep='~')) %>%
+    gather(esm_id, esm, -cs1, -cs2, -cs3, -cs4, -cs5, -id ) %>% 
+    gather(cs_id, cs, -esm_id, -esm, -id) %>% 
+    mutate(esm_id2 = substr(esm_id, nchar(esm_id), nchar(esm_id)),
+           cs_id2 = substr(cs_id, nchar(cs_id), nchar(cs_id))) %>% 
+    filter(esm_id2 == cs_id2) %>% 
+    select(-esm_id, -cs_id, -esm_id2, -cs_id2) %>%
+    arrange(id) %>% 
+    left_join(table_of_subsets2 %>% select(subset_id, id), by = 'id') %>% 
+    select(subset_id, esm, cs) %>%
+    rename(subset=esm) ->
+    ecs_subsets_clean
+```
+
+## minimize across all possible combinations
+
+```{r}
 
 
-
-# Subset that is minimum in the projection metric
+# Subset that is minimum in the projection metric across all possible subsets
 metrics %>%
     filter(projection_metric == min(projection_metric)) %>%
     left_join(table_of_subsets, by = c('subset_id')) ->
@@ -747,6 +777,34 @@ knitr::kable(coefficient_min)
 
 ```
 
+
+## minimize across ECS-distribution
+
+```{r}
+
+
+# Subset that is minimum in the projection metric across all possible subsets
+metrics %>%
+    left_join(ecs_subsets_clean, by = c('subset_id')) %>%
+    na.omit %>%
+    filter(projection_metric == min(projection_metric))  ->
+    projection_min
+
+metrics %>%
+    left_join(ecs_subsets_clean, by = c('subset_id')) %>%
+    na.omit %>%
+    filter(coefficient_metric == min(coefficient_metric)) ->
+    coefficient_min
+
+knitr::kable(projection_min)
+
+knitr::kable(coefficient_min)
+
+```
+
+
+
+
 ## plotting in full PCA space
 
 ```{r}
@@ -755,32 +813,64 @@ full_pca$x %>%
   as.data.frame() %>%
   mutate(id = row.names(.)) %>%
   separate(id, into=c('model', 'scenario', 'ensemble'), sep = '~') %>%
-  select(model, scenario, PC1, PC2, PC3, PC4, PC5, PC6, PC7, PC8, PC9)->
+  select(model, scenario, PC1, PC2, PC3, PC4, PC5, PC6)->
   coordinates
 
 ```
 
 
+### all PCs
+
+```{r}
+coordinates %>%
+    gather(pc_x, pc_x_val, -model, -scenario)  %>%
+    left_join(coordinates %>% 
+                  gather(pc_y, pc_y_val, -model, -scenario),
+               by = c('model', 'scenario')) ->
+    grid_plot
+
+
+ggplot(data = grid_plot) +
+    geom_point(mapping = aes(x = pc_x_val, y = pc_y_val,
+                             color = model, shape = scenario)) +
+     geom_point(data = grid_plot %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = pc_x_val, y = pc_y_val, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers') +
+    facet_grid(pc_y ~ pc_x)
+
+
+ggplot(data = grid_plot) +
+    geom_point(mapping = aes(x = pc_x_val, y = pc_y_val,
+                             color = model, shape = scenario)) +
+     geom_point(data = grid_plot %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = pc_x_val, y = pc_y_val, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers') +
+    facet_grid(pc_y ~ pc_x)
+
+
+```
 
 ### PC1 vs PC2
 
 ```{r, fig.height = 8, fig.width=10}
 
 ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario))+
+    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario))+
     ggtitle('PCA of full data')
 
 p1 <- ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
-               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, projection metric minimizers')
 
 p2 <- ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
-               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, coefficient metric minimizers')
 
@@ -794,16 +884,16 @@ gridExtra::grid.arrange(p1, p2)
 
 
 p3 <- ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
-               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, projection metric minimizers')
 
 p4 <- ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
-               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, coefficient metric minimizers')
 
@@ -879,32 +969,32 @@ knitr::kable(coefficient_min)
 
 
 gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
-               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
 p1)
 
 gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
-               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'),
 p2)
 
 
 gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
-               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
     ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
-               mapping = aes(x = -PC1, y = PC2, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'))
 ```
@@ -917,31 +1007,31 @@ gridExtra::grid.arrange(ggplot(coordinates) +
 
 
 gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
-               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
 p3)
 
 gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
-               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'),
 p4)
 
 gridExtra::grid.arrange(ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
-               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
     ggplot(coordinates) +
-    geom_point(mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
     geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
-               mapping = aes(x = -PC1, y = PC3, color = model, shape = scenario),
+               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
                size = 4) +
     ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'))
 
@@ -971,6 +1061,67 @@ gridExtra::grid.arrange(ggplot(coordinates) +
 
 
 # Validation
+
+
+## basic summary values
+
+```{r}
+as.data.frame(full_data) %>%
+    mutate(id = row.names(.)) %>%
+    separate(id, into = c('esm', 'scenario', 'ensemble') , sep = '~') %>%
+    gather(metric, value, -esm, -scenario, -ensemble) %>%
+    separate(metric, into = c('region', 'metric'), sep = '~') %>%
+    spread(metric, value)->
+    full_df
+
+full_df %>%
+    filter(esm %in% coefficient_min$subset) ->
+    sub_df
+
+
+
+full_df %>%
+    group_by(region) %>%
+    summarize(cmip_pr_end_anomaly_pct = mean(pr_end_anomaly_pct),
+              cmip_pr_iasd = mean(pr_iasd),
+              cmip_pr_mid_anomaly_pct = mean(pr_mid_anomaly_pct),
+              cmip_tas_end_anomaly = mean(tas_end_anomaly),
+              cmip_tas_iasd = mean(tas_iasd),
+              cmip_tas_mid_anomaly = mean(tas_mid_anomaly)) %>%
+    ungroup ->
+    full_summary
+
+sub_df %>%
+    group_by(region) %>%
+    summarize(sub_pr_end_anomaly_pct = mean(pr_end_anomaly_pct),
+              sub_pr_iasd = mean(pr_iasd),
+              sub_pr_mid_anomaly_pct = mean(pr_mid_anomaly_pct),
+              sub_tas_end_anomaly = mean(tas_end_anomaly),
+              sub_tas_iasd = mean(tas_iasd),
+              sub_tas_mid_anomaly = mean(tas_mid_anomaly)) %>%
+    ungroup ->
+    sub_summary
+
+
+full_summary %>%
+    left_join(sub_summary, by = 'region') %>%
+    mutate(diff_pr_end_anomaly_pct = cmip_pr_end_anomaly_pct-sub_pr_end_anomaly_pct,
+           diff_pr_iasd = cmip_pr_iasd-sub_pr_iasd,
+           diff_pr_mid_anomaly_pct = cmip_pr_mid_anomaly_pct-sub_pr_mid_anomaly_pct,
+           diff_tas_end_anomaly = cmip_tas_end_anomaly-sub_tas_end_anomaly,
+           diff_tas_iasd = cmip_tas_iasd-sub_tas_iasd,
+           diff_tas_mid_anomaly = cmip_tas_mid_anomaly-sub_tas_mid_anomaly) ->
+     compare
+
+max(abs(compare$diff_pr_end_anomaly_pct))
+max(abs(compare$diff_pr_iasd))
+max(abs(compare$diff_pr_mid_anomaly_pct))
+max(abs(compare$diff_tas_end_anomaly))
+max(abs(compare$diff_tas_iasd))
+max(abs(compare$diff_tas_mid_anomaly))
+```
+
+## HS notes
 
 - Hawkins and Sutton 09/Lehner2020: do for full data, do for final subset of ESMs
 and compare?
@@ -1006,4 +1157,6 @@ set of available models.
 
 Then how do I want to apply that to our IPCC regional metrics (ideally) or the 
 full time series
+
+
 
