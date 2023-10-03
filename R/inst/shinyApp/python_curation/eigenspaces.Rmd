@@ -759,7 +759,7 @@ write.csv(metrics, 'esm_subsets_metrics_22choose5_ECS.csv', row.names = FALSE)
 
 ```{r}
 # Metrics for every subset with IDs
-metrics <- read.csv('esm_subsets_metrics_22choose5.csv') %>%
+metrics <- read.csv('esm_subsets_metrics_22choose5_ECS.csv') %>%
     rename(projection_metric = avg_nrms_across_esms,
            coefficient_metric = avg_closest_L2)
 
