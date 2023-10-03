@@ -692,12 +692,41 @@ as.data.frame(t(apply(combn(nrow(df), nESMs),
     table_of_subsets
 write.csv(table_of_subsets, 'subsets_22choose5.csv', row.names = FALSE)
 
+# Table of all subsets with IDs
+table_of_subsets <- read.csv('subsets_22choose5.csv') 
+table_of_subsets %>%
+    mutate(mod = as.integer(row.names(.)) %% 5,
+           esm=paste0('esm', mod)) %>% 
+    select(-mod) %>% 
+    spread(esm, subset) %>% 
+    mutate(id = paste(esm1, esm2, esm3, esm4, esm0, sep='~')) ->
+    table_of_subsets2
+
+# Table of ECS preserving subsets
+ecs_subsets <- read.csv("five_sample_esm_climate_sensitivity.csv", stringsAsFactors = F)
+ecs_subsets %>%
+    mutate(id = paste(esm1, esm2, esm3, esm4, esm5, sep='~')) %>%
+    gather(esm_id, esm, -cs1, -cs2, -cs3, -cs4, -cs5, -id ) %>% 
+    gather(cs_id, cs, -esm_id, -esm, -id) %>% 
+    mutate(esm_id2 = substr(esm_id, nchar(esm_id), nchar(esm_id)),
+           cs_id2 = substr(cs_id, nchar(cs_id), nchar(cs_id))) %>% 
+    filter(esm_id2 == cs_id2) %>% 
+    select(-esm_id, -cs_id, -esm_id2, -cs_id2) %>%
+    arrange(id) %>% 
+    left_join(table_of_subsets2 %>% select(subset_id, id), by = 'id') %>% 
+    select(subset_id, esm, cs) %>%
+    rename(subset=esm) %>%
+    na.omit()->
+    ecs_subsets_clean
+```
+
+```{r, eval = FALSE}
 
 metrics <- data.frame()
     
-for (subsetid in unique(table_of_subsets$subset_id)){
+for (subsetid in unique(ecs_subsets_clean$subset_id)){
     
-    subset <- table_of_subsets[table_of_subsets['subset_id']==subsetid,]$subset
+    subset <- ecs_subsets_clean[ecs_subsets_clean['subset_id']==subsetid,]$subset
 
     get_subset_data(esmsubset = subset,
                     fulldata = full_data) ->
@@ -722,7 +751,7 @@ for (subsetid in unique(table_of_subsets$subset_id)){
     
 }
 
-write.csv(metrics, 'esm_subsets_metrics_22choose5.csv', row.names = FALSE)
+write.csv(metrics, 'esm_subsets_metrics_22choose5_ECS.csv', row.names = FALSE)
 
 ```
 
@@ -757,13 +786,14 @@ ecs_subsets %>%
     arrange(id) %>% 
     left_join(table_of_subsets2 %>% select(subset_id, id), by = 'id') %>% 
     select(subset_id, esm, cs) %>%
-    rename(subset=esm) ->
+    rename(subset=esm) %>%
+    na.omit() ->
     ecs_subsets_clean
 ```
 
 ## minimize across all possible combinations
 
-```{r}
+```{r, eval=FALSE}
 
 
 # Subset that is minimum in the projection metric across all possible subsets
