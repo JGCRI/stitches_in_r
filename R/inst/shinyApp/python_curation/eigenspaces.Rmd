@@ -62,7 +62,8 @@ subset2 <- c('ACCESS-CM2',
             
 
 # ESMS that dont have 4 experiments
-non_candidate_esm <- c("CIESM", "E3SM-1-1", "FIO-ESM-2-0", "GFDL-CM4", "IITM-ESM",
+non_candidate_esm <- c("CIESM", 
+                       "E3SM-1-1", "FIO-ESM-2-0", "GFDL-CM4", "IITM-ESM",
                        "IPSL-CM5A2-INCA", "KIOST-ESM", "NESM3", "NorESM2-LM")
             
 ```
@@ -78,7 +79,9 @@ region_summary_main %>%
   filter(experiment != 'ssp119',
          experiment != 'ssp434',
          experiment != 'ssp460',
-         experiment != 'ssp534-over')  %>%
+         experiment != 'ssp534-over',
+         !(esm %in% non_candidate_esm))  %>% # remove from the full set of data 
+                                             # that creates our 'true' CMIP6 PCA space
     rename(region = acronym) ->
   region_summary 
 
