@@ -720,11 +720,16 @@ ecs_subsets %>%
     ecs_subsets_clean
 ```
 
+
+# TODO idea
+distribution of error values across all subsets, across just hte ECS preserving subsets
 ```{r, eval = FALSE}
 
 metrics <- data.frame()
-    
+i <- 1
 for (subsetid in unique(table_of_subsets$subset_id)){
+    print(subsetid)
+    print(i)
     
     subset <- table_of_subsets[table_of_subsets['subset_id']==subsetid,]$subset
 
@@ -749,11 +754,16 @@ for (subsetid in unique(table_of_subsets$subset_id)){
     rm(subdata)
     rm(sub_pca)
     
+    i <- i+1
+    
 }
 
 write.csv(metrics, 'esm_subsets_metrics_22choose5.csv', row.names = FALSE)
 
 ```
+
+
+
 
 # Take a look at minimizing sets of ESMs
 
