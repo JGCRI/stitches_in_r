@@ -1,0 +1,88 @@
+---
+title: "HS uncertainty evalution"
+author: "acs"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+read_dir <- 'Uncertainty/'
+```
+
+# read, reshape uncertainty time series
+
+
+# Spatial info
+
+
+```{r, echo=FALSE}
+
+library(sf)
+
+shp <- st_read(dsn = 'IPCC-WGI-reference-regions-v4_shapefile/IPCC-WGI-reference-regions-v4.shp', stringsAsFactors = F)
+
+# add a numerical region id
+shp %>% 
+  mutate(region_id = as.integer(row.names(.))) ->
+  shp
+
+# add coordinate info probably
+shp1 <-  st_transform(shp, "+proj=longlat +ellps=WGS84 +datum=WGS84")
+
+# extract
+coords <- as.data.frame(st_coordinates(shp1))
+
+
+# get a mean lon and lat value in each shape
+coords %>%
+  rename(lon = X, lat = Y, region_id = L3) %>%
+  left_join(as.data.frame(shp) %>% select(region_id, Acronym), by = 'region_id') %>%
+  filter(grepl('PO', Acronym)) %>% 
+  # have to have lon on 0:360 so th pacific ocean behaves even though not
+  # looking at that here
+  mutate(lon_360 = if_else(lon >=0, lon, lon+360))%>%
+  group_by(region_id) %>%
+  summarise(mean_lon = mean(lon_360),
+            mean_lat = mean(lat)) %>%
+  ungroup  %>%
+  mutate(mean_lon = if_else(mean_lon >= 0 & mean_lon <= 180, 
+                            mean_lon, mean_lon - 360) ) ->
+  mean_pts_PO
+
+coords %>%
+  rename(lon = X, lat = Y, region_id = L3) %>%
+  left_join(as.data.frame(shp) %>% select(region_id, Acronym), by = 'region_id') %>%
+  filter(!grepl('PO', Acronym)) %>% 
+  # have to have lon on 0:360 so th pacific ocean behaves even though not
+  # looking at that here
+  group_by(region_id) %>%
+  summarise(mean_lon = mean(lon),
+            mean_lat = mean(lat)) %>%
+  ungroup  %>% 
+  bind_rows(mean_pts_PO)->
+  mean_pts 
+
+
+```
+
+
+```{r, fig.width=14, fig.height=10, echo=FALSE}
+# Join to the shape file and make sure this very simple way of
+# doing things ends up with a lon lat that is actually in each region
+shp %>%
+  left_join(mean_pts, by = 'region_id') ->
+  shp
+
+ggplot() +
+  geom_sf(data = shp  ) +
+  geom_point(data = shp, mapping = aes(x = mean_lon, y = mean_lat), color = 'red') +
+  geom_text(data = shp, mapping = aes(label = Acronym, x = mean_lon, y= mean_lat), size =5)
+
+         ```
