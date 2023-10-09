@@ -721,8 +721,6 @@ ecs_subsets %>%
 ```
 
 
-# TODO idea
-distribution of error values across all subsets, across just hte ECS preserving subsets
 ```{r, eval = FALSE}
 
 metrics <- data.frame()
@@ -763,6 +761,8 @@ write.csv(metrics, 'esm_subsets_metrics_22choose5.csv', row.names = FALSE)
 ```
 
 
+# TODO idea
+distribution of error values across all subsets, across just hte ECS preserving subsets
 
 
 # Take a look at minimizing sets of ESMs
