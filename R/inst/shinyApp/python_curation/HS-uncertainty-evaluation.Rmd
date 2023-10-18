@@ -13,13 +13,320 @@ library(dplyr)
 library(tidyr)
 library(ggplot2)
 
-read_dir <- 'Uncertainty/'
+read_dir <- 'Uncertainty'
 ```
 
 # read, reshape uncertainty time series
 
+```{r, echo = FALSE}
+pr_list <- list.files(read_dir, pattern = 'pr_',full.names = T)
+tas_list <- list.files(read_dir, pattern = 'tas_', full.names = T)
 
-# Spatial info
+# list of PR coeff metric files
+pr_coef <- pr_list[grepl('coefficient', pr_list)]
+
+# list of PR proj metric files
+pr_proj <- pr_list[grepl('projection', pr_list)]
+
+# list of PR full files
+pr_full <- pr_list[grepl('full', pr_list)]
+
+# list of tas coef metric files
+tas_coef <- tas_list[grepl('coefficient', tas_list)]
+
+# list of tas proj coeff files
+tas_proj <- tas_list[grepl('projection', tas_list)]
+
+# list of tas full files
+tas_full <- tas_list[grepl('full', tas_list)]
+
+
+# for each list of files, read in, add variable-region-metric id info, append
+uncertainties <- data.frame()
+for(filename in pr_coef){
+    print(filename)
+    f <- read.csv(filename, stringsAsFactors = F)
+
+    f %>%
+        mutate(var = 'pr',
+               metric = 'coef',
+               tmp = filename) %>%
+        separate(tmp, into = c('trash', 'rgn', 'trash2'), sep = '_', extra = 'merge' ) %>%
+        select(-trash, -trash2) %>%
+        bind_rows(uncertainties,.) ->
+        uncertainties
+    rm(f)
+}
+
+for(filename in pr_proj){
+    print(filename)
+    f <- read.csv(filename, stringsAsFactors = F)
+
+        f %>%
+        mutate(var = 'pr',
+               metric = 'proj',
+               tmp = filename) %>%
+        separate(tmp, into = c('trash', 'rgn', 'trash2'), sep = '_', extra = 'merge' ) %>%
+        select(-trash, -trash2) %>%
+        bind_rows(uncertainties,.) ->
+        uncertainties
+    rm(f)
+}
+
+for(filename in pr_full){
+    print(filename)
+    f <- read.csv(filename, stringsAsFactors = F)
+
+    f %>%
+        mutate(var = 'pr',
+               metric = 'full',
+               tmp = filename) %>%
+        separate(tmp, into = c('trash', 'rgn', 'trash2'), sep = '_', extra = 'merge' ) %>%
+        select(-trash, -trash2) %>%
+        bind_rows(uncertainties,.) ->
+        uncertainties
+    rm(f)
+}
+
+for(filename in tas_coef){
+    print(filename)
+    f <- read.csv(filename, stringsAsFactors = F)
+
+    f %>%
+        mutate(var = 'tas',
+               metric = 'coef',
+               tmp = filename) %>%
+        separate(tmp, into = c('trash', 'rgn', 'trash2'), sep = '_', extra = 'merge' ) %>%
+        select(-trash, -trash2) %>%
+        bind_rows(uncertainties,.) ->
+        uncertainties
+    rm(f)
+}
+
+for(filename in tas_proj){
+    print(filename)
+    f <- read.csv(filename, stringsAsFactors = F)
+
+    f %>%
+        mutate(var = 'tas',
+               metric = 'proj',
+               tmp = filename) %>%
+        separate(tmp, into = c('trash', 'rgn', 'trash2'), sep = '_', extra = 'merge' ) %>%
+        select(-trash, -trash2) %>%
+        bind_rows(uncertainties,.) ->
+        uncertainties
+    rm(f)
+}
+
+for(filename in tas_full){
+    print(filename)
+    f <- read.csv(filename, stringsAsFactors = F)
+    
+    f %>%
+        mutate(var = 'tas',
+               metric = 'full',
+               tmp = filename) %>%
+        separate(tmp, into = c('trash', 'rgn', 'trash2'), sep = '_', extra = 'merge' ) %>%
+        select(-trash, -trash2) %>%
+        bind_rows(uncertainties,.) ->
+        uncertainties
+    rm(f)
+}
+
+```
+
+
+```{r}
+
+# continue reshaping
+uncertainties %>% 
+    gather(uncertainty, value, -var, -metric, -rgn, - year) %>%
+    distinct->
+    uncert_long
+
+
+uncert_long %>%
+    filter(metric == 'full') %>%
+    rename(full = value) %>%
+    select(-metric) ->
+    uncert_full
+
+
+uncert_long %>%
+    filter(metric == 'coef') %>%
+    left_join(uncert_full, by = c('year', 'var', 'rgn', 'uncertainty')) ->
+    coef_metric
+
+uncert_long %>%
+    filter(metric == 'proj') %>%
+    left_join(uncert_full, by = c('year', 'var', 'rgn', 'uncertainty')) ->
+    proj_metric
+
+```
+
+
+#  Compare subsets to full
+
+```{r}
+
+
+coef_metric %>%
+    filter(year >= 2015) %>%
+    group_by(rgn, var, metric, uncertainty) %>%
+    summarize(rms = sqrt(mean((value-full)^2))) %>%
+    ungroup ->
+    coef_dist
+
+
+coef_metric %>%
+    filter(year >= 2015) %>%
+    group_by(rgn,  metric, uncertainty) %>%
+    summarize(rms = sqrt(mean((value-full)^2))) %>%
+    ungroup ->
+    coef_dist2
+
+proj_metric %>%
+    filter(year >= 2015) %>%
+    group_by(rgn, var, metric, uncertainty) %>%
+    summarize(rms = sqrt(mean((value-full)^2))) %>%
+    ungroup ->
+    proj_dist
+
+proj_metric %>%
+    filter(year >= 2015) %>%
+    group_by(rgn, metric, uncertainty) %>%
+    summarize(rms = sqrt(mean((value-full)^2))) %>%
+    ungroup ->
+    proj_dist2
+
+
+```
+## identify cutoff, patterns for each metric
+
+
+```{r, message=FALSE}
+ggplot(coef_dist2, aes(x = rms)) + geom_histogram()+
+    ggtitle('coef')
+
+ggplot(coef_dist2, aes(x = rms, color = uncertainty)) + geom_histogram()+
+    ggtitle('coef')
+
+
+ggplot(coef_dist, aes(x = rms)) + geom_histogram()+
+    ggtitle('coef')
+
+ggplot(coef_dist, aes(x = rms, color = uncertainty)) + geom_histogram()+
+    ggtitle('coef')
+
+ggplot(coef_dist, aes(x = rms, color = var)) + geom_histogram()+
+    ggtitle('coef')
+
+ggplot(coef_dist, aes(x = rms, color = interaction(var, uncertainty))) + 
+    geom_histogram()+
+    ggtitle('coef')
+
+ggplot(coef_dist, aes(x = rms, color = interaction(var, uncertainty))) + 
+    geom_histogram()+
+    facet_wrap(~var) +
+    ggtitle('coef')
+
+ggplot(proj_dist, aes(x = rms, color = interaction(var, uncertainty))) + 
+    geom_histogram()+
+    facet_wrap(~var)+
+    ggtitle('proj')
+```
+
+-spread is tighter for coef (most mass <0.17ish) but proj has fewer outliers for
+P (more for T)
+
+- so is 0.2 a fair cutoff for 'good' -> check HS figs
+
+- if so, then do count > 0.2 for P,T for two coeff
+
+## coef below cutoff
+
+```{r}
+coef_dist %>%
+    filter(rms >=0.2) %>%
+    select(rgn, var) %>%
+    distinct %>%
+    mutate(id = paste(rgn, var, sep='~')) ->
+    coef_bad
+
+
+coef_dist %>%
+    filter(rms <0.2 & rms >= 0.15) %>%
+    select(rgn, var) %>%
+    distinct  %>%
+    mutate(id = paste(rgn, var, sep='~')) ->
+    coef_questionable
+
+
+knitr::kable(coef_questionable)
+knitr::kable(coef_bad)
+
+
+uncert_long %>%
+    mutate(id = paste(rgn, var, sep='~')) %>%
+    filter(year >= 2015,
+           metric == 'full' | metric == 'coef',
+           id %in% coef_bad$id | id %in% coef_questionable$id) ->
+    coef_rgn_plots
+
+
+ggplot()+
+    geom_line(coef_rgn_plots %>% filter(metric == 'full'),
+              mapping=aes(x = year, y = value, color = uncertainty), linetype = 1) +
+    geom_line(coef_rgn_plots %>% filter(metric == 'coef'),
+              mapping=aes(x = year, y = value, color = uncertainty), linetype = 2) +
+    facet_wrap(~id, nrow = 3) +
+    ggtitle('coef')
+```
+
+
+
+## proj below cutoff
+
+```{r}
+proj_dist %>%
+    filter(rms >=0.2) %>%
+    select(rgn, var) %>%
+    distinct %>%
+    mutate(id = paste(rgn, var, sep='~')) ->
+    proj_bad
+
+
+proj_dist %>%
+    filter(rms <0.2 & rms >= 0.15) %>%
+    select(rgn, var) %>%
+    distinct  %>%
+    mutate(id = paste(rgn, var, sep='~')) ->
+    proj_questionable
+
+
+knitr::kable(proj_questionable)
+knitr::kable(proj_bad)
+
+
+uncert_long %>%
+    mutate(id = paste(rgn, var, sep='~')) %>%
+    filter(year >= 2015,
+           metric == 'full' | metric == 'proj',
+           id %in% proj_bad$id |  id %in% proj_questionable$id) ->
+    proj_rgn_plots
+
+
+ggplot()+
+    geom_line(proj_rgn_plots %>% filter(metric == 'full'),
+              mapping=aes(x = year, y = value, color = uncertainty), linetype = 1) +
+    geom_line(proj_rgn_plots %>% filter(metric == 'proj'),
+              mapping=aes(x = year, y = value, color = uncertainty), linetype = 2) +
+    facet_wrap(~id, nrow = 3) +
+    ggtitle('proj')
+```
+
+
+# Spatial info for plots where 'good'
 
 
 ```{r, echo=FALSE}
