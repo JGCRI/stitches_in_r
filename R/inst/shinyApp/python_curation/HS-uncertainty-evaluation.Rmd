@@ -14,6 +14,9 @@ library(tidyr)
 library(ggplot2)
 
 read_dir <- 'Uncertainty'
+
+year_cutoff <- 2040
+rms_cutoff <- 0.13
 ```
 
 # read, reshape uncertainty time series
@@ -44,7 +47,7 @@ tas_full <- tas_list[grepl('full', tas_list)]
 # for each list of files, read in, add variable-region-metric id info, append
 uncertainties <- data.frame()
 for(filename in pr_coef){
-    print(filename)
+   # print(filename)
     f <- read.csv(filename, stringsAsFactors = F)
 
     f %>%
@@ -59,7 +62,7 @@ for(filename in pr_coef){
 }
 
 for(filename in pr_proj){
-    print(filename)
+    #print(filename)
     f <- read.csv(filename, stringsAsFactors = F)
 
         f %>%
@@ -74,7 +77,7 @@ for(filename in pr_proj){
 }
 
 for(filename in pr_full){
-    print(filename)
+    #print(filename)
     f <- read.csv(filename, stringsAsFactors = F)
 
     f %>%
@@ -89,7 +92,7 @@ for(filename in pr_full){
 }
 
 for(filename in tas_coef){
-    print(filename)
+    #print(filename)
     f <- read.csv(filename, stringsAsFactors = F)
 
     f %>%
@@ -104,7 +107,7 @@ for(filename in tas_coef){
 }
 
 for(filename in tas_proj){
-    print(filename)
+    # print(filename)
     f <- read.csv(filename, stringsAsFactors = F)
 
     f %>%
@@ -119,7 +122,7 @@ for(filename in tas_proj){
 }
 
 for(filename in tas_full){
-    print(filename)
+    #print(filename)
     f <- read.csv(filename, stringsAsFactors = F)
     
     f %>%
@@ -171,7 +174,7 @@ uncert_long %>%
 
 
 coef_metric %>%
-    filter(year >= 2015) %>%
+    filter(year >= year_cutoff) %>%
     group_by(rgn, var, metric, uncertainty) %>%
     summarize(rms = sqrt(mean((value-full)^2))) %>%
     ungroup ->
@@ -179,21 +182,21 @@ coef_metric %>%
 
 
 coef_metric %>%
-    filter(year >= 2015) %>%
+    filter(year >= year_cutoff) %>%
     group_by(rgn,  metric, uncertainty) %>%
     summarize(rms = sqrt(mean((value-full)^2))) %>%
     ungroup ->
     coef_dist2
 
 proj_metric %>%
-    filter(year >= 2015) %>%
+    filter(year >= year_cutoff) %>%
     group_by(rgn, var, metric, uncertainty) %>%
     summarize(rms = sqrt(mean((value-full)^2))) %>%
     ungroup ->
     proj_dist
 
 proj_metric %>%
-    filter(year >= 2015) %>%
+    filter(year >= year_cutoff) %>%
     group_by(rgn, metric, uncertainty) %>%
     summarize(rms = sqrt(mean((value-full)^2))) %>%
     ungroup ->
@@ -205,25 +208,25 @@ proj_metric %>%
 
 
 ```{r, message=FALSE}
-ggplot(coef_dist2, aes(x = rms)) + geom_histogram()+
-    ggtitle('coef')
-
-ggplot(coef_dist2, aes(x = rms, color = uncertainty)) + geom_histogram()+
-    ggtitle('coef')
-
-
-ggplot(coef_dist, aes(x = rms)) + geom_histogram()+
-    ggtitle('coef')
-
-ggplot(coef_dist, aes(x = rms, color = uncertainty)) + geom_histogram()+
-    ggtitle('coef')
-
-ggplot(coef_dist, aes(x = rms, color = var)) + geom_histogram()+
-    ggtitle('coef')
-
-ggplot(coef_dist, aes(x = rms, color = interaction(var, uncertainty))) + 
-    geom_histogram()+
-    ggtitle('coef')
+# ggplot(coef_dist2, aes(x = rms)) + geom_histogram()+
+#     ggtitle('coef')
+# 
+# ggplot(coef_dist2, aes(x = rms, color = uncertainty)) + geom_histogram()+
+#     ggtitle('coef')
+# 
+# 
+# ggplot(coef_dist, aes(x = rms)) + geom_histogram()+
+#     ggtitle('coef')
+# 
+# ggplot(coef_dist, aes(x = rms, color = uncertainty)) + geom_histogram()+
+#     ggtitle('coef')
+# 
+# ggplot(coef_dist, aes(x = rms, color = var)) + geom_histogram()+
+#     ggtitle('coef')
+# 
+# ggplot(coef_dist, aes(x = rms, color = interaction(var, uncertainty))) + 
+#     geom_histogram()+
+#     ggtitle('coef')
 
 ggplot(coef_dist, aes(x = rms, color = interaction(var, uncertainty))) + 
     geom_histogram()+
@@ -255,7 +258,7 @@ coef_dist %>%
 
 
 coef_dist %>%
-    filter(rms <0.2 & rms >= 0.15) %>%
+    filter(rms <0.2 & rms >= rms_cutoff) %>%
     select(rgn, var) %>%
     distinct  %>%
     mutate(id = paste(rgn, var, sep='~')) ->
@@ -268,19 +271,73 @@ knitr::kable(coef_bad)
 
 uncert_long %>%
     mutate(id = paste(rgn, var, sep='~')) %>%
-    filter(year >= 2015,
+    filter(year >= year_cutoff,
            metric == 'full' | metric == 'coef',
-           id %in% coef_bad$id | id %in% coef_questionable$id) ->
+           id %in% coef_bad$id |
+               id %in% coef_questionable$id) ->
     coef_rgn_plots
 
 
+# ggplot()+
+#     geom_line(coef_rgn_plots %>% filter(metric == 'full'),
+#               mapping=aes(x = year, y = value, color = uncertainty), linetype = 1) +
+#     geom_line(coef_rgn_plots %>% filter(metric == 'coef'),
+#               mapping=aes(x = year, y = value, color = uncertainty), linetype = 2) +
+#     facet_wrap(~id, nrow = 3) +
+#     ggtitle('coef')
+
+
+
+
+# Order stacks for HS fig
+coef_rgn_plots %>%
+    mutate(uncertainty = if_else(uncertainty == 'Inter.Annual.Variability', 'A.Inter.Annual.Variability',
+                                 if_else(uncertainty == 'Scenario.Uncertainty', 'B.Scenario.Uncertainty',
+                                         if_else(uncertainty == 'Model.Uncertainty', 'C.Model.Uncertainty',
+                                                 'NA' )))) ->
+    coef_rgn_plots
+
+# ggplot()+
+#     geom_bar(coef_rgn_plots %>% filter(metric == 'full'),
+#              position = 'stack', stat = 'identity',
+#               mapping=aes(x = year, y = value, color = uncertainty, fill = uncertainty)) +
+#     scale_color_manual(values = c('darkorange', 'forestgreen', 'blue4')) +
+#     scale_fill_manual(values = c('darkorange', 'forestgreen', 'blue4')) +
+#     geom_bar(coef_rgn_plots %>% filter(metric == 'coef'),
+#              position = 'stack', stat = 'identity',
+#               mapping=aes(x = year, y = value, group = uncertainty), fill = NA, color = 'white', size= 0.1) +
+#     #scale_color_manual(values = c('orange', 'green', 'blue')) +
+#     facet_wrap(~id, nrow = 3) +
+#     ggtitle('coef')
+
+
+
+
+# Extract lines for coef:
+coef_rgn_plots %>%
+    filter(uncertainty != 'A.Inter.Annual.Variability',
+           metric=='coef') %>%
+    group_by(year, var, metric, rgn, id) %>%
+    summarize(value = sum(value)) %>%
+    ungroup() %>%
+    mutate(uncertainty = 'B.Scenario.Uncertainty') %>%
+    bind_rows(coef_rgn_plots %>%
+                  filter(uncertainty == 'C.Model.Uncertainty',
+                         metric=='coef'))  ->
+    coef_rgn_plots2
+
 ggplot()+
-    geom_line(coef_rgn_plots %>% filter(metric == 'full'),
-              mapping=aes(x = year, y = value, color = uncertainty), linetype = 1) +
-    geom_line(coef_rgn_plots %>% filter(metric == 'coef'),
-              mapping=aes(x = year, y = value, color = uncertainty), linetype = 2) +
+    geom_bar(coef_rgn_plots %>% filter(metric == 'full'),
+             position = 'stack', stat = 'identity',
+              mapping=aes(x = year, y = value, color = uncertainty, fill = uncertainty)) +
+    scale_color_manual(values = c('darkorange', 'forestgreen', 'blue4')) +
+    scale_fill_manual(values = c('darkorange', 'forestgreen', 'blue4')) +
+    geom_line(coef_rgn_plots2,
+              mapping=aes(x = year, y = value, linetype = uncertainty), color = 'white') +
     facet_wrap(~id, nrow = 3) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
     ggtitle('coef')
+
 ```
 
 
@@ -297,7 +354,7 @@ proj_dist %>%
 
 
 proj_dist %>%
-    filter(rms <0.2 & rms >= 0.15) %>%
+    filter(rms <0.2 & rms >= rms_cutoff) %>%
     select(rgn, var) %>%
     distinct  %>%
     mutate(id = paste(rgn, var, sep='~')) ->
@@ -310,18 +367,66 @@ knitr::kable(proj_bad)
 
 uncert_long %>%
     mutate(id = paste(rgn, var, sep='~')) %>%
-    filter(year >= 2015,
+    filter(year >= year_cutoff,
            metric == 'full' | metric == 'proj',
            id %in% proj_bad$id |  id %in% proj_questionable$id) ->
     proj_rgn_plots
 
 
+# ggplot()+
+#     geom_line(proj_rgn_plots %>% filter(metric == 'full'),
+#               mapping=aes(x = year, y = value, color = uncertainty), linetype = 1) +
+#     geom_line(proj_rgn_plots %>% filter(metric == 'proj'),
+#               mapping=aes(x = year, y = value, color = uncertainty), linetype = 2) +
+#     facet_wrap(~id, nrow = 3) +
+#     ggtitle('proj')
+
+
+
+# Order stacks for HS fig
+proj_rgn_plots %>%
+    mutate(uncertainty = if_else(uncertainty == 'Inter.Annual.Variability', 'A.Inter.Annual.Variability',
+                                 if_else(uncertainty == 'Scenario.Uncertainty', 'B.Scenario.Uncertainty',
+                                         if_else(uncertainty == 'Model.Uncertainty', 'C.Model.Uncertainty',
+                                                 'NA' )))) ->
+    proj_rgn_plots
+
+# ggplot()+
+#     geom_bar(proj_rgn_plots %>% filter(metric == 'full'),
+#              position = 'stack', stat = 'identity',
+#               mapping=aes(x = year, y = value, color = uncertainty, fill = uncertainty)) +
+#     scale_color_manual(values = c('darkorange', 'forestgreen', 'blue4')) +
+#     scale_fill_manual(values = c('darkorange', 'forestgreen', 'blue4')) +
+#     geom_bar(proj_rgn_plots %>% filter(metric == 'proj'),
+#              position = 'stack', stat = 'identity',
+#               mapping=aes(x = year, y = value, group = uncertainty), fill = NA, color = 'white', size= 0.1) +
+#     #scale_color_manual(values = c('orange', 'green', 'blue')) +
+#     facet_wrap(~id, nrow = 3) +
+#     ggtitle('proj')
+
+# Extract lines for proj:
+proj_rgn_plots %>%
+    filter(uncertainty != 'A.Inter.Annual.Variability',
+           metric=='proj') %>%
+    group_by(year, var, metric, rgn, id) %>%
+    summarize(value = sum(value)) %>%
+    ungroup() %>%
+    mutate(uncertainty = 'B.Scenario.Uncertainty') %>%
+    bind_rows(proj_rgn_plots %>%
+                  filter(uncertainty == 'C.Model.Uncertainty',
+                         metric=='proj'))  ->
+    proj_rgn_plots2
+
 ggplot()+
-    geom_line(proj_rgn_plots %>% filter(metric == 'full'),
-              mapping=aes(x = year, y = value, color = uncertainty), linetype = 1) +
-    geom_line(proj_rgn_plots %>% filter(metric == 'proj'),
-              mapping=aes(x = year, y = value, color = uncertainty), linetype = 2) +
+    geom_bar(proj_rgn_plots %>% filter(metric == 'full'),
+             position = 'stack', stat = 'identity',
+              mapping=aes(x = year, y = value, color = uncertainty, fill = uncertainty)) +
+    scale_color_manual(values = c('darkorange', 'forestgreen', 'blue4')) +
+    scale_fill_manual(values = c('darkorange', 'forestgreen', 'blue4')) +
+    geom_line(proj_rgn_plots2,
+              mapping=aes(x = year, y = value, linetype = uncertainty), color = 'white') +
     facet_wrap(~id, nrow = 3) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
     ggtitle('proj')
 ```
 
@@ -384,12 +489,72 @@ coords %>%
 # Join to the shape file and make sure this very simple way of
 # doing things ends up with a lon lat that is actually in each region
 shp %>%
-  left_join(mean_pts, by = 'region_id') ->
-  shp
+    left_join(mean_pts, by = 'region_id') %>%
+    left_join(coef_dist %>%
+                  select(rgn, var) %>%
+                  distinct, 
+                  by = c('Acronym' = 'rgn'))->
+  shp2
+
+shp2 %>%
+    mutate(id = paste(Acronym, var, sep = '~'),
+           fill_color = if_else(id %in% coef_bad$id | id %in% coef_questionable$id,
+                                0, 1),
+           fill_color = if_else(fill_color == 1 & var == 'pr', 0.5, fill_color)) %>%
+    group_by(Continent, Type, Name, Acronym, region_id, mean_lon, 
+             mean_lat, geometry) %>%
+    summarize(fill_color = sum(fill_color)) %>%
+    ungroup %>%
+    mutate(fill_color = as.character(fill_color)) ->
+    shp3
+
+
 
 ggplot() +
-  geom_sf(data = shp  ) +
-  geom_point(data = shp, mapping = aes(x = mean_lon, y = mean_lat), color = 'red') +
-  geom_text(data = shp, mapping = aes(label = Acronym, x = mean_lon, y= mean_lat), size =5)
+  geom_sf(data = shp3, mapping = aes(fill = fill_color)  ) +
+  #geom_point(data = shp, mapping = aes(x = mean_lon, y = mean_lat), color = 'red') +
+  geom_text(data = shp3, mapping = aes(label = Acronym, x = mean_lon, y= mean_lat), size =5) +
+  ggtitle('coef')
 
-         ```
+
+
+
+
+# Join to the shape file and make sure this very simple way of
+# doing things ends up with a lon lat that is actually in each region
+shp %>%
+    left_join(mean_pts, by = 'region_id') %>%
+    left_join(proj_dist %>%
+                  select(rgn, var) %>%
+                  distinct, 
+                  by = c('Acronym' = 'rgn'))->
+  shp4
+
+shp4 %>%
+    mutate(id = paste(Acronym, var, sep = '~'),
+           fill_color = if_else(id %in% proj_bad$id | id %in% proj_questionable$id,
+                                0, 1),
+           fill_color = if_else(fill_color == 1 & var == 'pr', 0.5, fill_color)) %>%
+    group_by(Continent, Type, Name, Acronym, region_id, mean_lon, 
+             mean_lat, geometry) %>%
+    summarize(fill_color = sum(fill_color)) %>%
+    ungroup %>%
+    mutate(fill_color = as.character(fill_color)) ->
+    shp5
+
+
+
+ggplot() +
+  geom_sf(data = shp5, mapping = aes(fill = fill_color)  ) +
+  #geom_point(data = shp, mapping = aes(x = mean_lon, y = mean_lat), color = 'red') +
+  geom_text(data = shp5, mapping = aes(label = Acronym, x = mean_lon, y= mean_lat), size =5) +
+  ggtitle('proj')
+
+```
+# Notes
+
+INteresting thing - because our region indices are focused around mid and end of
+century, our HS figures tend to be closest there.
+
+If we look over 2015 on for comparing metrics instead of 2040, we do see that the
+latter half of the century is often better than first half even in the 'bad' HS
