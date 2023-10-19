@@ -16,7 +16,7 @@ library(ggplot2)
 read_dir <- 'Uncertainty'
 
 year_cutoff <- 2040
-rms_cutoff <- 0.13
+rms_cutoff <- 0.1
 ```
 
 # read, reshape uncertainty time series
@@ -248,7 +248,7 @@ P (more for T)
 
 ## coef below cutoff
 
-```{r}
+```{r, fig.width=14, fig.height=10}
 coef_dist %>%
     filter(rms >=0.2) %>%
     select(rgn, var) %>%
@@ -344,7 +344,7 @@ ggplot()+
 
 ## proj below cutoff
 
-```{r}
+```{r, fig.width=14, fig.height=10}
 proj_dist %>%
     filter(rms >=0.2) %>%
     select(rgn, var) %>%
