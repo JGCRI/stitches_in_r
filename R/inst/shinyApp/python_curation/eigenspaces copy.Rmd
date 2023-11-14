@@ -1,0 +1,1079 @@
+---
+title: "Eigenspaces"
+author: "acs"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+# Goal
+
+from a selection of possible subset/chosen ESMs, come up with a metric for each
+of thoes subsets that says how good the subset is at representing the 'truth' 
+that is the PCA of all of the CMIP6 data. 
+
+Then select the subset of ESMs with the smallest value for that metric and those
+are our 'curated archive' ESMs.
+
+Work below covers 2 different metrics:
+
+1. The projection of all CMIP6 data into the first N eigenvectors from the PCA
+of all data vs projection of all CMIP6 data into the first N eigenvectors from 
+the PCA of the subset data. Calculate NRMS between those two projections for each
+CMIP6 esmXscenario. Metric is the average value of all of those NRMS's.
+
+- saying for each subset of 5 ESMs, how similar is all CMIP6 data projected
+into that subset's space vs projected into the 'true' space 
+
+2. The coefficients of all CMIP6 data into the first N eigenvectors from the PCA
+of all data. For each of the OOS esmXscenarios, for each subset ESM, calculate 
+the smallest L2 distance from the coefficients across the subset ESM's scenarios=
+how close each subset ESM can get to every out of sample data point. Then take
+the minimum across subset ESMs = how close the selected subset can get to each
+OOS data point. The average of that distance from all OOS data points is then
+the metric for that subset.
+
+- could weight by amount of variance explained by each dimension.
+
+
+# set up
+
+And some package and labeling info
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+
+timeseries_dir <- 'extracted_timeseries/'
+
+metrics_write_dir <-  'extracted_timeseries/extracted_metrics/'
+
+
+# strawman subset of ESMs from our original 12, have all 4 experiments each
+subset <- c('ACCESS-ESM1-5', 'CAMS-CSM1-0' , 'CMCC-CM2-SR5','GFDL-ESM4',  'MRI-ESM2-0')
+subset2 <- c('ACCESS-CM2',
+             'ACCESS-ESM1-5',
+             'BCC-CSM2-MR',
+             'MIROC6', 'MRI-ESM2-0' )
+            
+
+# ESMS that dont have 4 experiments
+non_candidate_esm <- c("CIESM", 
+                       "E3SM-1-1", "FIO-ESM-2-0", "GFDL-CM4", "IITM-ESM",
+                       "IPSL-CM5A2-INCA", "KIOST-ESM", "NESM3", "NorESM2-LM")
+            
+```
+
+
+# Load ESM data that's been processed
+
+
+```{r}
+region_summary_main <- read.csv(paste0(metrics_write_dir, 'IPCC_land_regions_metrics.csv'), 
+                                stringsAsFactors = FALSE)
+region_summary_main %>%
+  filter(experiment != 'ssp119',
+         experiment != 'ssp434',
+         experiment != 'ssp460',
+         experiment != 'ssp534-over',
+         !(esm %in% non_candidate_esm))  %>% # remove from the full set of data 
+                                             # that creates our 'true' CMIP6 PCA space
+    rename(region = acronym) ->
+  region_summary 
+
+print(head(region_summary))
+
+```
+
+# Prep data for PCA
+
+```{r, warning=FALSE, message=FALSE}
+# reshape:
+grouped_data <- split(region_summary, list(region_summary$esm, region_summary$experiment))
+grouped_data <- grouped_data[sapply(grouped_data, function(x) dim(x)[1]) > 0]
+
+shaped_data <- lapply(grouped_data, function(group){
+    if (nrow(group) >0) {
+      group %>%
+        filter(variable == 'tas') %>% 
+        select(esm, experiment, ensemble,type, region,
+               iasd, end_anomaly, mid_anomaly) %>%
+        rename(tas_iasd = iasd,
+               tas_end_anomaly = end_anomaly,     
+               tas_mid_anomaly = mid_anomaly) %>% 
+        left_join(group %>%
+                      filter(variable == 'pr') %>% 
+                      select(esm, experiment, ensemble,type, region,
+                             iasd, end_anomaly_pct, mid_anomaly_pct) %>%
+                      rename(pr_iasd = iasd,
+                             pr_end_anomaly_pct = end_anomaly_pct,    
+                             pr_mid_anomaly_pct = mid_anomaly_pct),
+                  by = c('esm','experiment', 'ensemble', 'type', 'region')
+               ) ->
+    reshaped
+    
+    reshaped %>%
+        group_by(esm, experiment, type, region) %>%
+        summarize(tas_iasd=mean(tas_iasd),
+                  tas_end_anomaly=mean(tas_end_anomaly, na.rm = T),
+                  tas_mid_anomaly = mean(tas_mid_anomaly, na.rm = T),
+                  pr_iasd = mean(pr_iasd, na.rm = T),
+                  pr_end_anomaly_pct = mean(pr_end_anomaly_pct, na.rm = T),
+                  pr_mid_anomaly_pct = mean(pr_mid_anomaly_pct, na.rm = T) ) %>%
+        ungroup() %>%
+        mutate(ensemble = 'ensemble_avg') -> #%>%
+        #bind_rows(reshaped) ->
+        reshaped2
+    
+    #TODO need to change shaping if including ensemble members
+    reshaped2 %>%
+        select(-type) %>%
+        gather(metric, value, -esm, -experiment, -ensemble, -region) %>%
+        mutate(row_id = paste0(region, '~', metric),
+           col_id = paste0(esm, '~', experiment, '~', ensemble)) %>%
+        select(-esm, -experiment,-ensemble, -region, -metric) %>%
+        as.data.frame() ->
+    reshaped3 
+  
+  colnames(reshaped3) <- c(paste0(unique(reshaped3$col_id)), 'row_id', 'col_id')
+  rownames(reshaped3) <- paste0(reshaped3$row_id)
+  
+  reshaped3 %>% 
+    select(-col_id, -row_id) ->
+    out
+  
+  return(out)  
+    }
+    
+    }
+)
+
+# combine columns but then transpose because prcomp wants rows to be observations 
+# and columns to be variables (but doing it the other way first is easier to code)
+full_data <- t(do.call(cbind, shaped_data) )
+
+
+# Drop anything with missing data
+full_data1 <- na.omit(full_data)
+print('removed rows due to missing data')
+print(row.names(full_data)[c(which(!(row.names(full_data) %in% row.names(full_data1))))])
+
+
+full_data <- as.data.frame(full_data1)
+rm(full_data1)
+```
+
+And the subsetted ESMs
+
+```{r}
+as.data.frame(full_data) %>%
+    mutate(temp = row.names(.)) %>%
+    separate(temp, into=c('esm', 'trash'), sep = '~', extra='merge') %>%
+    filter(esm %in% subset) %>% 
+    select(-esm, -trash) %>%
+    as.matrix(.) ->
+    subdata
+```
+
+# PCA
+
+## cmip6 'truth'
+
+```{r}
+full_pca <- prcomp(full_data, center=TRUE, scale = TRUE)
+
+
+# eigenspace from the PCA
+full_eigenval <- data.frame(eigenvalues=(full_pca$sdev)^2)
+full_eigenvec <- full_pca$rotation
+
+# skree
+var_explained_df <- data.frame(var_explained=(full_pca$sdev)^2/sum((full_pca$sdev)^2)) %>%
+    mutate(PC = as.integer(row.names(.)))
+
+var_explained_df %>%
+  ggplot(aes(x=PC,y=var_explained, group=1))+
+  geom_point(size=4)+
+  geom_line()+
+  labs(title="Scree plot: PCA on scaled data - all ESMs")
+
+
+pfull <- var_explained_df %>%
+    filter(PC <=15)%>%
+  ggplot(aes(x=PC,y=var_explained, group=1))+
+  geom_point(size=4)+
+  geom_line()+
+  labs(title="Scree plot: PCA on scaled data - all ESMs")
+
+pfull 
+```
+
+
+
+
+## subset
+
+Functionalise from here, basically I think? :
+
+```{r}
+
+
+sub_pca <- prcomp(subdata, center=TRUE, scale = TRUE)
+
+
+# eigenspace from the PCA
+sub_eigenval <- data.frame(eigenvalues=(sub_pca$sdev)^2)
+sub_eigenvec <- sub_pca$rotation
+
+# skree
+var_explained_dfsub <- data.frame(var_explained=(sub_pca$sdev)^2/sum((sub_pca$sdev)^2)) %>%
+    mutate(PC = as.integer(row.names(.)))
+
+var_explained_dfsub %>%
+  ggplot(aes(x=PC,y=var_explained, group=1))+
+  geom_point(size=4)+
+  geom_line()+
+  labs(title="Scree plot: PCA on scaled data - subset ESMs")
+
+
+psub<- var_explained_dfsub %>%
+    filter(PC <=15)%>%
+  ggplot(aes(x=PC,y=var_explained, group=1))+
+  geom_point(size=4)+
+  geom_line()+
+  labs(title="Scree plot: PCA on scaled data - subset ESMs")
+psub
+```
+
+
+## side by side scree
+
+```{r}
+pfull
+psub
+
+```
+
+
+
+-> first five eigenvalues focus
+
+
+
+# Compare subset PCA space with full PCA space
+
+## differences in the projections of the same data 
+
+We've picked our subset of ESMs, so we project each available CMIP6 data row 
+into: 
+
+1. the first 5 eigenvectors of the full data
+2. the first 5 eigenvectors of the subset data
+
+Then compare those projections. 
+
+then this will be repeated for every combination of 5 ESMs
+
+Then pick the combo of 5 ESMs based on minimizing error for all observations.
+
+- Pro: don't have to set a cutoff, can just select subset with smallest error
+
+- con: a lot of calculations
+
+```{r, warning=FALSE, message=FALSE}
+
+# project new data onto the PCA space
+#TODO double check with fresher eyes
+project_pca <- function(data, pca, n_eigenvalues=5){
+    
+    # don't need this for full data on full pca, could just do pca$x[,1:n]
+    # but for full data on sub pca, do need this:
+    coeff <- scale(data, pca$center, pca$scale) %*% pca$rotation[,1:n_eigenvalues]
+    
+    reconstructions <- sapply(1:nrow(data), function(rowindex){
+        reconstructed <- rowSums(sweep(pca$rotation[,1:n_eigenvalues], 
+                                       MARGIN=2,
+                                       coeff[rowindex,],
+                                       `*`))
+        return(reconstructed)
+    })
+    
+    colnames(reconstructions) <- rownames(data)
+    return(reconstructions)
+}
+
+# reconstruct the subdata in the space of first 5 eigenvectors of full data
+recon_full <- project_pca(data = full_data, pca = full_pca, n_eigenvalues = 5)
+
+
+# reconstruct the subdata in the space of first 5 eigenvectors of sub data
+recon_sub <- project_pca(data = full_data, pca = sub_pca, n_eigenvalues = 5)
+
+errs <- data.frame()
+for (colindex in 1:ncol(recon_sub)){
+
+    sub <- recon_sub[, colindex]
+    full <- recon_full[,colindex]
+    
+    bind_rows(data.frame(id = colnames(recon_sub)[colindex]) %>%
+                  mutate(rms = sqrt(sum((sub - full)^2)) ,
+                         nrms = rms /sqrt(sum((full)^2))) ,
+              errs) ->
+        errs
+
+}
+
+
+errs %>%
+    separate(id, into = c('esm', 'scenario', 'ensemble'), sep ='~')  %>%
+    group_by(esm) %>%
+    summarize(avg_nrms_across_exps = mean(nrms)) %>%
+    ungroup ->
+    nrms
+
+mean(nrms$avg_nrms_across_exps)
+```
+
+
+
+
+
+
+# compare coefficients in full PCA space
+
+from the set of available coefficients in the full PCA space, select models whose
+coefficients span the space in the sense of:
+
+- every ESM is 'close enough' to one of the selected models in terms of L2
+distance of coefficients
+
+- Pro: only need the full pca, not a pca of every candidate subset so fewer 
+calculations
+
+- Con: have to decide on a cutoff
+
+```{r, warning=FALSE, message=FALSE}
+n_eigenvalues <- 5
+
+
+coeff <- as.data.frame(full_pca$x[,1:n_eigenvalues])
+
+# reshape so have info by ESM and experiment
+coeff %>%
+    mutate(id = row.names(.)) %>%
+    separate(id, into = c('esm', 'scenario', 'ensemble'), sep ='~') %>%
+    gather(pc, value, -esm, -scenario, -ensemble) -> # %>%
+    # spread(scenario, value) ->
+    coeff_all_ESM
+
+
+# pull off the subset coefficients into their own DF for comparison
+coeff_all_ESM %>%
+    filter(esm %in% subset)  %>%
+    spread(scenario, value) ->
+    coeff_sub_ESM
+
+out <- data.frame()
+for (esmname in unique(coeff_all_ESM$esm)){
+    
+    if(!(esmname %in% subset)){
+        
+        coeff_all_ESM %>%
+            filter(esm == esmname) ->
+            oos 
+        
+        
+        # For each subset ESM, compare each oos scenario with all 4 scenarios
+        # and record the smallest. Then have a data frame with how close each
+        # subset ESM can get to each scenario of the oos ESM.
+        oos %>%
+            left_join(coeff_sub_ESM %>%    
+                          select(-ensemble) %>%
+                          rename(subset_ESM = esm), 
+                      by = 'pc') %>%
+            group_by(esm, scenario, ensemble, subset_ESM) %>%
+            summarise(closest_L2 = min( sqrt(sum((value-ssp126)^2)),
+                                     sqrt(sum((value-ssp245)^2)),
+                                     sqrt(sum((value-ssp370)^2)),
+                                     sqrt(sum((value-ssp585)^2))))  %>%
+            ungroup %>% 
+            # Then fillter to just the closest on each scenario
+            group_by(esm, scenario, ensemble) %>%
+            filter(closest_L2 == min(closest_L2)) %>%
+            ungroup %>%
+            bind_rows(out, .) ->
+            out
+        
+        # If there is only one subset ESM that's closest for each scenario,
+        # obviously just pick that. But not sure where to go from there.
+
+    }
+}
+
+# take average L2 for all oos esms - that's the characteristic value for this
+# particular subset. Then pick the subset that has smallest characteristic value.
+
+mean(out$closest_L2)
+
+```
+
+- may be the case that from a stitches perspective, we want to block
+compare ESM to ESM (so concatenate experiments into super vector of coeff) but
+how to handle ESMs that don't have all the experiments for that comparison? if 
+ACCESS is the oos ESM and didn't do ssp245, we'd need to like find the ESM with 
+the 3 most similar experiments, not necessarily just exclude 245 from the chosen
+
+- but also even oos ESM has all 4 experiments, why should we necessarily care 
+about 245 being close to 245. Maybe 126 and 245 are close to 245 and that's fine.
+
+
+- ^ That's what I'm doing but Can convince myself either way - one oos ESM-Exp 
+combo being similar to one
+chosen ESM-Exp combo is enough for stitches to cover all behaviors; OR really
+need ESM to ESM comparison only
+
+
+
+# ESM selection
+
+Then we would be brute force looping over eligible combinations of 5 ESMs
+(have all 4 scenarios, maybe some criteria on number ensemble members, and 
+represent ECS distribution) and pick the one with
+either smallest vector differences = the axes are closest 
+or the smallest projection differences.
+
+
+- Con of either method: not suitable for in-filling if decide to add an extra 
+ESM but could probably be adapted? Like maybe we chose 5 so we want to see 
+what the best ESM to add as 6 conditional on the 5 we already have would be? 
+which may be different than the 6 best
+
+- 30 ESMs in list total, 8 have a missing experiment
+- 22 choose 5 = 26334 combinations (better than 30 choose 5, 142k)
+- we should aim to whittle down either on the front end by less than 22 - require
+some amount of ensemble members and/or represent ECS
+
+
+
+
+## functionalized
+
+```{r}
+
+get_subset_data <- function(esmsubset, fulldata){
+    as.data.frame(fulldata) %>%
+        mutate(temp = row.names(.)) %>%
+        separate(temp, into=c('esm', 'trash'), sep = '~', extra='merge') %>%
+        filter(esm %in% esmsubset) %>% 
+        select(-esm, -trash) %>%
+        as.matrix(.) ->
+        subdata
+    
+    return(subdata)
+}
+
+
+project_pca <- function(data, pca, n_eigenvalues=5){
+    
+    # don't need this for full data on full pca, could just do pca$x[,1:n]
+    # but for full data on sub pca, do need this:
+    coeff <- scale(data, pca$center, pca$scale) %*% pca$rotation[,1:n_eigenvalues]
+    
+    reconstructions <- sapply(1:nrow(data), function(rowindex){
+        reconstructed <- rowSums(sweep(pca$rotation[,1:n_eigenvalues], 
+                                       MARGIN=2,
+                                       coeff[rowindex,],
+                                       `*`))
+        return(reconstructed)
+    })
+    
+    colnames(reconstructions) <- rownames(data)
+    return(reconstructions)
+}
+
+
+compare_projections <- function(fulldata, fullpca, subpca, n_eigenvalues = 5){
+    
+    # reconstruct the subdata in the space of first 5 eigenvectors of full data
+    recon_full <- project_pca(data = fulldata,
+                              pca = fullpca, 
+                              n_eigenvalues = n_eigenvalues)
+    
+    # reconstruct the subdata in the space of first 5 eigenvectors of sub data
+    recon_sub <- project_pca(data = fulldata,
+                             pca = subpca,
+                             n_eigenvalues = n_eigenvalues)
+    
+    
+    # compare reconstructions 
+    errs <- data.frame()
+    for (colindex in 1:ncol(recon_sub)){
+        sub <- recon_sub[, colindex]
+        full <- recon_full[,colindex]
+        
+        bind_rows(data.frame(id = colnames(recon_sub)[colindex]) %>%
+                      mutate(rms = sqrt(sum((sub - full)^2)) ,
+                             nrms = rms /sqrt(sum((full)^2))) ,
+                  errs) ->
+            errs
+        } 
+    
+    errs %>%
+        separate(id, into = c('esm', 'scenario', 'ensemble'), sep ='~')  %>%
+        group_by(esm) %>%
+        summarize(avg_nrms_across_exps = mean(nrms)) %>%
+        ungroup ->
+        nrms
+    
+    return(data.frame(avg_nrms_across_esms = mean(nrms$avg_nrms_across_exps)))
+}
+
+full_pca_distances <- function(subset_esms, fullpca, n_eigenvalues = 5){
+
+    coeff <- as.data.frame(fullpca$x[,1:n_eigenvalues])
+    
+    # reshape so have info by ESM and experiment
+    coeff %>%
+        mutate(id = row.names(.)) %>%
+        separate(id, into = c('esm', 'scenario', 'ensemble'), sep ='~') %>%
+        gather(pc, value, -esm, -scenario, -ensemble) -> # %>%
+        # spread(scenario, value) ->
+        coeff_all_ESM
+    
+    # pull off the subset coefficients into their own DF for comparison
+    coeff_all_ESM %>%
+        filter(esm %in% subset_esms)  %>%
+        spread(scenario, value) ->
+        coeff_sub_ESM
+    
+    out <- data.frame()
+    for (esmname in unique(coeff_all_ESM$esm)){
+        
+        # only calculate for oos ESMs
+        if(!(esmname %in% subset_esms)){
+            
+            coeff_all_ESM %>%
+                filter(esm == esmname) ->
+                oos 
+            
+            # For each subset ESM, compare each oos scenario with all 4 scenarios
+            # and record the smallest. Then have a data frame with how close each
+            # subset ESM can get to each scenario of the oos ESM.
+            oos %>%
+                left_join(coeff_sub_ESM %>%    
+                              select(-ensemble) %>%
+                              rename(subset_ESM = esm), 
+                          by = 'pc') %>%
+                group_by(esm, scenario, ensemble, subset_ESM) %>%
+                summarise(closest_L2 = min( sqrt(sum((value-ssp126)^2)),
+                                            sqrt(sum((value-ssp245)^2)),
+                                            sqrt(sum((value-ssp370)^2)),
+                                            sqrt(sum((value-ssp585)^2))))  %>%
+                ungroup %>% 
+                # Then filter to just the closest of any subset ESM
+                # on each oos scenario
+                group_by(esm, scenario, ensemble) %>%
+                filter(closest_L2 == min(closest_L2)) %>%
+                ungroup %>%
+                bind_rows(out, .) ->
+                out
+            # If there is only one subset ESM that's closest for each scenario,
+            # obviously just pick that. But not sure where to go from there.
+            }        # end calculation for each subset esm
+        
+        } # end loop over all ESMs
+    
+    # take average L2 for all oos esms - that's the characteristic value for this
+    # particular subset. Then pick the subset that has smallest characteristic value.
+    
+    return(data.frame(avg_closest_L2 = mean(out$closest_L2)))
+    
+}
+
+
+########
+
+# test functions
+suppressMessages(compare_projections(fulldata = full_data,
+                          fullpca = full_pca,
+                          subpca = sub_pca,
+                          n_eigenvalues = 5))
+
+suppressWarnings(suppressMessages(full_pca_distances(subset_esms = subset,
+                   fullpca = full_pca,
+                   n_eigenvalues = 5)))
+
+```
+
+
+# Test
+
+Would load all the regional metric, reshape, do full PCA still.
+
+Then suppose we have labeled subsets
+
+```{r, warning=FALSE, message=FALSE}
+table_of_subsets <- bind_rows(data.frame(subset_id = rep('subset1', 5),
+                                         subset = subset),
+                              data.frame(subset_id = rep('subset2', 5),
+                                         subset = subset2))
+knitr::kable(table_of_subsets)
+
+rm(subset)
+rm(subset2)
+rm(subdata)
+rm(sub_pca)
+```
+
+For each subset, calculate the two metrics. 
+
+```{r, warning=FALSE, message=FALSE}
+
+metrics <- data.frame()
+
+for (subsetid in unique(table_of_subsets$subset_id)){
+    
+    subset <- table_of_subsets[table_of_subsets['subset_id']==subsetid,]$subset
+
+    get_subset_data(esmsubset = subset,
+                    fulldata = full_data) ->
+        subdata
+    
+    sub_pca <- prcomp(subdata, center=TRUE, scale = TRUE)
+    
+    data.frame(subset_id = subsetid,
+               projection_metric = compare_projections(fulldata = full_data,
+                                                       fullpca = full_pca,
+                                                       subpca = sub_pca,
+                                                       n_eigenvalues = 5),
+               coeff_metric = full_pca_distances(subset_esms = subset,
+                                                 fullpca = full_pca,
+                                                 n_eigenvalues = 5)) %>%
+        bind_rows(metrics, .)->
+        metrics
+               
+    rm(subset)
+    rm(subdata)
+    rm(sub_pca)
+    
+}
+
+write.csv(metrics, 'esm_subsets_metrics.csv', row.names = FALSE)
+```
+
+
+
+
+
+# all subsets
+
+
+```{r, eval=FALSE}
+nESMs <- 5
+
+region_summary %>%
+    select(esm) %>%
+    distinct %>% 
+    filter(!(esm %in% non_candidate_esm)) ->
+    df
+
+as.data.frame(t(apply(combn(nrow(df), nESMs), 
+                      2, function(i) df[i,])
+                )
+              ) %>%
+    mutate(subset_id = paste0('subset', as.integer(row.names(.)))) %>%
+    gather(trash, subset, -subset_id) %>%
+    select(-trash) %>%
+    arrange(subset_id) ->
+    table_of_subsets
+write.csv(table_of_subsets, 'subsets_22choose5.csv', row.names = FALSE)
+
+# Table of all subsets with IDs
+table_of_subsets <- read.csv('subsets_22choose5.csv') 
+table_of_subsets %>%
+    mutate(mod = as.integer(row.names(.)) %% 5,
+           esm=paste0('esm', mod)) %>% 
+    select(-mod) %>% 
+    spread(esm, subset) %>% 
+    mutate(id = paste(esm1, esm2, esm3, esm4, esm0, sep='~')) ->
+    table_of_subsets2
+
+# Table of ECS preserving subsets
+ecs_subsets <- read.csv("five_sample_esm_climate_sensitivity.csv", stringsAsFactors = F)
+ecs_subsets %>%
+    mutate(id = paste(esm1, esm2, esm3, esm4, esm5, sep='~')) %>%
+    gather(esm_id, esm, -cs1, -cs2, -cs3, -cs4, -cs5, -id ) %>% 
+    gather(cs_id, cs, -esm_id, -esm, -id) %>% 
+    mutate(esm_id2 = substr(esm_id, nchar(esm_id), nchar(esm_id)),
+           cs_id2 = substr(cs_id, nchar(cs_id), nchar(cs_id))) %>% 
+    filter(esm_id2 == cs_id2) %>% 
+    select(-esm_id, -cs_id, -esm_id2, -cs_id2) %>%
+    arrange(id) %>% 
+    left_join(table_of_subsets2 %>% select(subset_id, id), by = 'id') %>% 
+    select(subset_id, esm, cs) %>%
+    rename(subset=esm) %>%
+    na.omit()->
+    ecs_subsets_clean
+```
+
+
+```{r, eval = FALSE}
+
+metrics <- data.frame()
+i <- 1
+for (subsetid in unique(table_of_subsets$subset_id)){
+    print(subsetid)
+    print(i)
+    
+    subset <- table_of_subsets[table_of_subsets['subset_id']==subsetid,]$subset
+
+    get_subset_data(esmsubset = subset,
+                    fulldata = full_data) ->
+        subdata
+    
+    sub_pca <- prcomp(subdata, center=TRUE, scale = TRUE)
+    
+    data.frame(subset_id = subsetid,
+               projection_metric = suppressMessages(compare_projections(fulldata = full_data,
+                                                       fullpca = full_pca,
+                                                       subpca = sub_pca,
+                                                       n_eigenvalues = 5)),
+               coeff_metric = suppressWarnings(suppressMessages(full_pca_distances(subset_esms = subset,
+                                                 fullpca = full_pca,
+                                                 n_eigenvalues = 5)))) %>%
+        bind_rows(metrics, .)->
+        metrics
+               
+    rm(subset)
+    rm(subdata)
+    rm(sub_pca)
+    
+    i <- i+1
+    
+}
+
+write.csv(metrics, 'esm_subsets_metrics_22choose5.csv', row.names = FALSE)
+
+```
+
+
+# Take a look at minimizing sets of ESMs
+
+```{r}
+# Metrics for every subset with IDs
+metrics <- read.csv('esm_subsets_metrics_22choose5.csv') %>%
+    rename(projection_metric = avg_nrms_across_esms,
+           coefficient_metric = avg_closest_L2)
+
+# Table of all subsets with IDs
+table_of_subsets <- read.csv('subsets_22choose5.csv') 
+table_of_subsets %>%
+    mutate(mod = as.integer(row.names(.)) %% 5,
+           esm=paste0('esm', mod)) %>% 
+    select(-mod) %>% 
+    spread(esm, subset) %>% 
+    mutate(id = paste(esm1, esm2, esm3, esm4, esm0, sep='~')) ->
+    table_of_subsets2
+
+# Table of ECS preserving subsets
+ecs_subsets <- read.csv("five_sample_esm_climate_sensitivity.csv", stringsAsFactors = F)
+ecs_subsets %>%
+    mutate(id = paste(esm1, esm2, esm3, esm4, esm5, sep='~')) %>%
+    gather(esm_id, esm, -cs1, -cs2, -cs3, -cs4, -cs5, -id ) %>% 
+    gather(cs_id, cs, -esm_id, -esm, -id) %>% 
+    mutate(esm_id2 = substr(esm_id, nchar(esm_id), nchar(esm_id)),
+           cs_id2 = substr(cs_id, nchar(cs_id), nchar(cs_id))) %>% 
+    filter(esm_id2 == cs_id2) %>% 
+    select(-esm_id, -cs_id, -esm_id2, -cs_id2) %>%
+    arrange(id) %>% 
+    left_join(table_of_subsets2 %>% select(subset_id, id), by = 'id') %>% 
+    select(subset_id, esm, cs) %>%
+    rename(subset=esm) %>%
+    na.omit() ->
+    ecs_subsets_clean
+```
+
+
+
+
+# TODO idea
+
+distribution of error values across all subsets, across just hte ECS preserving subsets
+
+
+
+## minimize across all possible combinations
+
+```{r}
+
+
+# Subset that is minimum in the projection metric across all possible subsets
+metrics %>%
+    filter(projection_metric == min(projection_metric)) %>%
+    left_join(table_of_subsets, by = c('subset_id')) ->
+    projection_min
+
+metrics %>%
+    filter(coefficient_metric == min(coefficient_metric)) %>%
+    left_join(table_of_subsets, by = c('subset_id')) ->
+    coefficient_min
+
+knitr::kable(projection_min)
+
+knitr::kable(coefficient_min)
+
+```
+
+
+## minimize across ECS-distribution
+
+```{r}
+
+
+# Subset that is minimum in the projection metric across all possible subsets
+metrics %>%
+    left_join(ecs_subsets_clean, by = c('subset_id')) %>%
+    na.omit %>%
+    filter(projection_metric == min(projection_metric))  ->
+    projection_min
+
+metrics %>%
+    left_join(ecs_subsets_clean, by = c('subset_id')) %>%
+    na.omit %>%
+    filter(coefficient_metric == min(coefficient_metric)) ->
+    coefficient_min
+
+knitr::kable(projection_min)
+
+knitr::kable(coefficient_min)
+
+```
+
+
+
+
+## plotting in full PCA space
+
+```{r}
+
+full_pca$x %>%
+  as.data.frame() %>%
+  mutate(id = row.names(.)) %>%
+  separate(id, into=c('model', 'scenario', 'ensemble'), sep = '~') %>%
+  select(model, scenario, PC1, PC2, PC3, PC4, PC5, PC6)->
+  coordinates
+
+```
+
+
+### all PCs
+
+```{r , fig.height=10, fig.width=12}
+coordinates %>%
+    gather(pc_x, pc_x_val, -model, -scenario)  %>%
+    left_join(coordinates %>% 
+                  gather(pc_y, pc_y_val, -model, -scenario),
+               by = c('model', 'scenario'))  %>%
+    mutate(x_id = as.integer(substr(pc_x, nchar(pc_x), nchar(pc_x))),
+           y_id = as.integer(substr(pc_y, nchar(pc_y), nchar(pc_y)))) %>%
+    filter(y_id > x_id) ->
+    grid_plot
+
+
+ggplot(data = grid_plot) +
+    geom_point(mapping = aes(x = pc_x_val, y = pc_y_val,
+                             color = model, shape = scenario), size = 0.5) +
+     geom_point(data = grid_plot %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = pc_x_val, y = pc_y_val, color = model, shape = scenario),
+               size = 2) +
+    ggtitle('PCA of full data, projection metric minimizers') +
+    facet_grid(pc_y ~ pc_x)
+
+
+ggplot(data = grid_plot) +
+    geom_point(mapping = aes(x = pc_x_val, y = pc_y_val,
+                             color = model, shape = scenario), size = 0.5) +
+     geom_point(data = grid_plot %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = pc_x_val, y = pc_y_val, color = model, shape = scenario),
+               size = 2) +
+    ggtitle('PCA of full data, coefficient metric minimizers') +
+    facet_grid(pc_y ~ pc_x)
+
+
+```
+
+### PC1 vs PC2
+
+```{r, fig.height = 8, fig.width=10}
+
+ggplot(coordinates) +
+    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario))+
+    ggtitle('PCA of full data')
+
+p1 <- ggplot(coordinates) +
+    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers')
+
+p2 <- ggplot(coordinates) +
+    geom_point(mapping = aes(x = PC1, y = PC2, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = PC1, y = PC2, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers')
+
+gridExtra::grid.arrange(p1, p2)
+```
+
+
+### PC1 vs PC3
+
+```{r, fig.height=8, fig.width=10}
+
+
+p3 <- ggplot(coordinates) +
+    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers')
+
+p4 <- ggplot(coordinates) +
+    geom_point(mapping = aes(x = PC1, y = PC3, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = PC1, y = PC3, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers')
+
+gridExtra::grid.arrange(p3, p4)
+```
+
+
+### PC3 vs PC4
+
+```{r, fig.height=8, fig.width=10}
+
+
+gridExtra::grid.arrange(ggplot(coordinates) +
+    geom_point(mapping = aes(x = PC3, y = PC4, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% projection_min$subset),
+               mapping = aes(x = PC3, y = PC4, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, projection metric minimizers, exclude MRI'),
+    ggplot(coordinates) +
+    geom_point(mapping = aes(x = PC3, y = PC4, color = model, shape = scenario)) +
+    geom_point(data = coordinates %>% filter(model %in% coefficient_min$subset),
+               mapping = aes(x = PC3, y = PC4, color = model, shape = scenario),
+               size = 4) +
+    ggtitle('PCA of full data, coefficient metric minimizers, exclude MRI'))
+
+
+```
+
+
+# Validation
+
+
+## basic summary values
+
+```{r}
+as.data.frame(full_data) %>%
+    mutate(id = row.names(.)) %>%
+    separate(id, into = c('esm', 'scenario', 'ensemble') , sep = '~') %>%
+    gather(metric, value, -esm, -scenario, -ensemble) %>%
+    separate(metric, into = c('region', 'metric'), sep = '~') %>%
+    spread(metric, value)->
+    full_df
+
+full_df %>%
+    filter(esm %in% coefficient_min$subset) ->
+    sub_df
+
+
+
+full_df %>%
+    group_by(region) %>%
+    summarize(cmip_pr_end_anomaly_pct = mean(pr_end_anomaly_pct),
+              cmip_pr_iasd = mean(pr_iasd),
+              cmip_pr_mid_anomaly_pct = mean(pr_mid_anomaly_pct),
+              cmip_tas_end_anomaly = mean(tas_end_anomaly),
+              cmip_tas_iasd = mean(tas_iasd),
+              cmip_tas_mid_anomaly = mean(tas_mid_anomaly)) %>%
+    ungroup ->
+    full_summary
+
+sub_df %>%
+    group_by(region) %>%
+    summarize(sub_pr_end_anomaly_pct = mean(pr_end_anomaly_pct),
+              sub_pr_iasd = mean(pr_iasd),
+              sub_pr_mid_anomaly_pct = mean(pr_mid_anomaly_pct),
+              sub_tas_end_anomaly = mean(tas_end_anomaly),
+              sub_tas_iasd = mean(tas_iasd),
+              sub_tas_mid_anomaly = mean(tas_mid_anomaly)) %>%
+    ungroup ->
+    sub_summary
+
+
+full_summary %>%
+    left_join(sub_summary, by = 'region') %>%
+    mutate(diff_pr_end_anomaly_pct = cmip_pr_end_anomaly_pct-sub_pr_end_anomaly_pct,
+           diff_pr_iasd = cmip_pr_iasd-sub_pr_iasd,
+           diff_pr_mid_anomaly_pct = cmip_pr_mid_anomaly_pct-sub_pr_mid_anomaly_pct,
+           diff_tas_end_anomaly = cmip_tas_end_anomaly-sub_tas_end_anomaly,
+           diff_tas_iasd = cmip_tas_iasd-sub_tas_iasd,
+           diff_tas_mid_anomaly = cmip_tas_mid_anomaly-sub_tas_mid_anomaly) ->
+     compare
+
+max(abs(compare$diff_pr_end_anomaly_pct))
+max(abs(compare$diff_pr_iasd))
+max(abs(compare$diff_pr_mid_anomaly_pct))
+max(abs(compare$diff_tas_end_anomaly))
+max(abs(compare$diff_tas_iasd))
+max(abs(compare$diff_tas_mid_anomaly))
+```
+
+## HS notes
+
+- Hawkins and Sutton 09/Lehner2020: do for full data, do for final subset of ESMs
+and compare?
+
+From Lehner https://esd.copernicus.org/articles/11/491/2020/esd-11-491-2020.pdf
+
+- T and P globally and regionally over time; and gridded for time slices
+
+
+1. the model uncertainty M is calculated as the
+variance across the ensemble means of the seven SMILEs
+(i.e., across the forced responses of the SMILEs). 
+
+
+2. internal variability uncertainty I is calculated as the variance
+across ensemble members of a given SMILE, yielding one
+estimate of I per model. Prior to this calculation, time series are smoothed
+with the running mean corresponding to
+the target metric (here mostly decadal means). Averaging
+across the seven I values yields the multimodel mean internal variability
+uncertainty Imean. Alternatively, to explore the
+assumption that Imean does not change over time, we use the
+1950–2014 average value of Imean throughout the calculation
+(i.e., Ifixed). We also use the model with the largest and smallest I , i.e., 
+Imax and Imin, to quantify the e influence of model
+uncertainty in the estimate of I.
+
+
+3. Following HS09, we calculate S as the variance across the multimodel means 
+calculated for the different emissions scenarios, using a consistent
+set of available models.
+
+
+Then how do I want to apply that to our IPCC regional metrics (ideally) or the 
+full time series
+
+
+

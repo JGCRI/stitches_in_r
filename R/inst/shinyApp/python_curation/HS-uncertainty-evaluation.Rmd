@@ -8,7 +8,7 @@ output:
     toc_float: true
 ---
 
-```{r setup, include=FALSE}
+```{r setup}
 library(dplyr)
 library(tidyr)
 library(ggplot2)

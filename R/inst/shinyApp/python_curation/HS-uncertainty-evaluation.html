@@ -1484,6 +1484,22 @@ border-radius: 0px;
 </div>
 
 
+<pre class="r"><code>library(dplyr)</code></pre>
+<pre><code>## 
+## Attaching package: &#39;dplyr&#39;</code></pre>
+<pre><code>## The following objects are masked from &#39;package:stats&#39;:
+## 
+##     filter, lag</code></pre>
+<pre><code>## The following objects are masked from &#39;package:base&#39;:
+## 
+##     intersect, setdiff, setequal, union</code></pre>
+<pre class="r"><code>library(tidyr)
+library(ggplot2)
+
+read_dir &lt;- &#39;Uncertainty&#39;
+
+year_cutoff &lt;- 2040
+rms_cutoff &lt;- 0.1</code></pre>
 <div id="read-reshape-uncertainty-time-series" class="section level1">
 <h1>read, reshape uncertainty time series</h1>
 <pre class="r"><code># continue reshaping

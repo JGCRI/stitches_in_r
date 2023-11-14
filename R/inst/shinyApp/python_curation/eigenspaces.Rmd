@@ -534,7 +534,7 @@ compare_projections <- function(fulldata, fullpca, subpca, n_eigenvalues = 5){
 
 full_pca_distances <- function(subset_esms, fullpca, n_eigenvalues = 5){
 
-    coeff <- as.data.frame(fullpca$x[,1:n_eigenvalues])
+    coeff <- as.data.frame(fullpca$x[,1:n_eigenvalues]) # same coeff as if project into just 5 instead of pulling first 5
     
     # reshape so have info by ESM and experiment
     coeff %>%
@@ -801,6 +801,7 @@ ecs_subsets %>%
 
 
 # TODO idea
+
 distribution of error values across all subsets, across just hte ECS preserving subsets
 
 
@@ -863,7 +864,7 @@ full_pca$x %>%
   as.data.frame() %>%
   mutate(id = row.names(.)) %>%
   separate(id, into=c('model', 'scenario', 'ensemble'), sep = '~') %>%
-  select(model, scenario, PC1, PC2, PC3, PC4, PC5, PC6)->
+  select(model, scenario, PC1, PC2, PC3, PC4, PC5)->
   coordinates
 
 ```
